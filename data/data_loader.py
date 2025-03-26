@@ -9,7 +9,7 @@ import numpy as np
 import jax
 
 # for mel-spectogramm maybe use torchaudio ? for this or create by myself in jax
-import librosa
+from librosa.feature import melspectrogram
 import soundfile
 
 # logging
@@ -22,7 +22,14 @@ from einops import rearrange, reduce, repeat
 
 
 class HF_dataset():
+    """
+    This class provides an easy way to load an huggingface audio dataset and convert it quickly for TTS training
+    args:
     
+    path_to_data:
+    target_sample_rate:
+    
+    """
     
     def __init(self, path_to_data:str, 
                target_sample_rate:int, 
@@ -46,11 +53,17 @@ class HF_dataset():
                                  name=self.language,
                                  streaming = self.if_stream)
         
+    def __len__(self):
+        return len(self.data)
     
+    def __getitem(self, index):
+        pass
     
 
 class Mozilla_dataset():
-    
+    """
+    small Dataloader for the Mozilla Dataset, could have a diffrent structure to huggingface dataset
+    """
     
     def __init__(self, path_to_data:str, target_sample_rate:int,hop_length:int):
         pass
