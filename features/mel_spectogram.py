@@ -4,6 +4,8 @@ from flax import nnx
 from jax.random import PRNGKey, normal
 import matplotlib.pyplot as plt
 
+# abeondoned for now !!
+
 class MelSpec(nnx.Module):
     """
     
