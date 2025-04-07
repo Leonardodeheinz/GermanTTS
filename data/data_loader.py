@@ -27,7 +27,7 @@ import os
 
 
 
-class Huggingface_Dataset(datasets.Dataset):
+class Huggingface_Dataset:
     """
     This class provides an easy way to load an huggingface audio dataset and convert it quickly for TTS training
     args:
@@ -44,28 +44,30 @@ class Huggingface_Dataset(datasets.Dataset):
         if_stream: bool = False,
         language:str = "german",
         split:str = "",
-        cache_dir:str = ""   # location to safe the dataset
+        cache_dir:str = "",
     ):
         # download specific settings
-        
-        super().__init__()
+       
         self.if_stream = if_stream  # maybe not neccessary if will just have it already available
         self.language = language  # specify language to load 
         self.split = split  # train, dev or test
         self.name_of_dataset = name_of_dataset
+
                
         # check if datset is already loaded in cache
         if os.path.isdir(cache_dir):
             self.data = load_dataset(path = name_of_dataset, cache_dir=cache_dir)
         else:  # relead dataset if not already done
-            self.data = load_dataset(path = name_of_dataset,
+            self.data = load_dataset(path = self.name_of_dataset,
                                      name = self.language,
                                      split = self.split,
-                                     streaming = self.if_stream)
+                                     streaming = self.if_stream,
+                                     )
+            self.data = self.data.with_format("torch")
         
-        self.data.with_format("torch")
-            
-
+    
+       # breakpoint()    
+        
         
     
         
@@ -79,21 +81,20 @@ class Huggingface_Dataset(datasets.Dataset):
         return next(iter(self.data))
     
     
-    def set_format(self):
+    def remove_columns(self, columns_to_remove):
         """
         sets the format for preprocessing
         """
-        if isinstance(self.data, datasets.arrow_dataset.Dataset):  # check if dataset is right format
-            for 
+        self.data.remove_columns(column_names = columns_to_remove)
         
 
         
-    def safe_preprocess(self):
+    def safe_data(self):
         """
         safe preprocessed data
         """
         
-    def load_preprocessed(self):
+    def load_preprocessed_data(self):
         """
         load preprocessed data
         """
@@ -109,12 +110,21 @@ class Huggingface_Dataset(datasets.Dataset):
         Returns:
             datasets.dataset_dict: _description_
         """
+        return self.data
     
+    def group_data_speaker(self):
+        """
+        This function should group data of one specific speaker, e.g. for OrpheusTTS training
+        """
     
 
-facebook_german = Huggingface_Dataset("facebook/multilingual_librispeech",
-                                       if_stream = True,
-                                       language = "german", 
-                                       split = "1_hours",
-                                       cache_dir = "res/example")
 
+columns_to_remove = ["original_path", "file", "id","chapter_id"]
+
+facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
+                                       if_stream = False,
+                                       language = 'german', 
+                                       split = "dev",)
+                                       #cache_dir = "res/example")
+facebook_german.remove_columns(columns_to_remove=columns_to_remove)
+breakpoint()
