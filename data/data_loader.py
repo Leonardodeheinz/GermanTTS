@@ -69,7 +69,8 @@ class Huggingface_Dataset:
        # breakpoint()    
         
         
-    
+    def get_data(self):
+        return self.data
         
     def get_shape(self):
         return self.data.shape
@@ -89,19 +90,17 @@ class Huggingface_Dataset:
         
 
         
-    def safe_data(self):
+    def safe_data(self, directory_to_save_to:str = ""):
         """
-        safe preprocessed data
+        safe preprocessed data, not load data not needed because is catched if in constructur already
         """
+        self.data.save_to_disk(directory_to_save_to)
         
-    def load_preprocessed_data(self):
-        """
-        load preprocessed data
-        """
-
+    
+    
     def convert_to_jax(self):
         """
-        surley needed
+        casting before training start may be enough 
         """
     
     def get_dataset(self) -> datasets.dataset_dict:
@@ -116,6 +115,7 @@ class Huggingface_Dataset:
         """
         This function should group data of one specific speaker, e.g. for OrpheusTTS training
         """
+        pass
     
 
 
@@ -124,7 +124,9 @@ columns_to_remove = ["original_path", "file", "id","chapter_id"]
 facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
                                        if_stream = False,
                                        language = 'german', 
-                                       split = "dev",)
+                                       split = "train",)
                                        #cache_dir = "res/example")
 facebook_german.remove_columns(columns_to_remove=columns_to_remove)
-breakpoint()
+
+facebook_german.safe_data("/home/dheinz/Documents/GermanTTS/res/example/")
+
