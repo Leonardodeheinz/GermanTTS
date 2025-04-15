@@ -4,15 +4,19 @@ from datasets import get_dataset_split_names
 from datasets import get_dataset_config_names
 from datasets import Dataset, Features, Array2D
 
-from torchaudio.transforms._transforms import Resample
-#from torchaudio.functional.functional import  
+
+from data.features.PreProcesesAudio import (
+    MelSpec,
+    Resampler 
+)
 
 # helpful array handling libaries
 import datasets
 import numpy as np
 import jax.numpy as jnp
 
-# for mel-spectogramm maybe use torchaudio ? for this or create by myself in jax
+# for plotting mel spectogram
+import matplotlib.pyplot as plt
 
 
 # logging
@@ -23,9 +27,6 @@ from einops import rearrange, reduce, repeat
 
 # check if directory exits
 import os 
-
-
-
 
 class Huggingface_Dataset:
     """
@@ -65,8 +66,11 @@ class Huggingface_Dataset:
                                      )
             self.data = self.data.with_format("torch")
         
-    
-       # breakpoint()    
+        
+        # basic information for the preprocessing
+        self.sampling_rate = self.data[0]["audio"]["sampling_rate"]
+        
+     
         
         
     def get_data(self):
@@ -90,18 +94,37 @@ class Huggingface_Dataset:
         
 
         
-    def safe_data(self, directory_to_save_to:str = ""):
+    def __safe_data__(self, directory_to_save_to:str = ""):
         """
         safe preprocessed data, not load data not needed because is catched if in constructur already
         """
         self.data.save_to_disk(directory_to_save_to)
         
-    
-    
-    def convert_to_jax(self):
+    def pre_process(self, audio_threshold_max:int = 20, audio_threshold_min:int = 3):
         """
-        casting before training start may be enough 
+        pre_process whole dataset and save it 
         """
+        resampler = Resampler(orig_freq = self.sampling_rate)
+        mel_spec = MelSpec()
+        
+        logger.info(f"Sampling Rate of our dataest{self.sampling_rate}")
+        
+        for file_index in range(self.get_shape()):
+            
+            if audio_threshold_max >= self.data["audio_duration"] > audio_threshold_min:
+                logger.info(f"File with index:{file_index}, in Dataset: {}") # log index of data that is too long or too short
+            else:
+                self.data[file_index] = Resampler(self.data[file_index]["audio"]["array"])
+                logger.debug()
+                self.data[file_index] = rearrange()
+                logger.debug()
+                self.data[file_index] = MelSpec(self.data[file_index]["audio"]["array"])
+                
+            
+            
+        
+
+        
     
     def get_dataset(self) -> datasets.dataset_dict:
         """
@@ -115,8 +138,19 @@ class Huggingface_Dataset:
         """
         This function should group data of one specific speaker, e.g. for OrpheusTTS training
         """
-        pass
+        
     
+    
+    def plot_mel_spectrogram(self,mel_spec, t, sr=24_000, n_mels=80):
+        """Plot the Mel spectrogram using matplotlib."""
+        plt.figure(figsize=(10, 4))
+        plt.imshow(mel_spec, aspect='auto', origin='lower', cmap='magma', extent=[t.min(), t.max(), 0, n_mels])
+        plt.colorbar(label="Log Magnitude")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Mel Frequency Bins")
+        plt.title("Mel Spectrogram")
+        plt.show()
+
 
 
 columns_to_remove = ["original_path", "file", "id","chapter_id"]
@@ -124,8 +158,15 @@ columns_to_remove = ["original_path", "file", "id","chapter_id"]
 facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
                                        if_stream = False,
                                        language = 'german', 
-                                       split = "train",)
-                                       #cache_dir = "res/example")
+                                       split = "train",
+                                       cache_dir = "res/example/train")
+                                       
+common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_voice_17_0",
+                                   if_stream = False, 
+                                   language = "de",
+                                   split = "train"
+                                   chach_dir = "res/example/train")           
+                            
 facebook_german.remove_columns(columns_to_remove=columns_to_remove)
 
 facebook_german.safe_data("/home/dheinz/Documents/GermanTTS/res/example/")
