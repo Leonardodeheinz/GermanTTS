@@ -1,3 +1,14 @@
+"""
+ein notation:
+b - batch
+n - sequence
+f - frequency token dimension
+nt - text sequence
+nw - raw wave length
+d - dimension
+dt - dimension text
+"""
+
 # usefull functions from huggingface
 from datasets import load_dataset
 from datasets import get_dataset_split_names
@@ -5,7 +16,7 @@ from datasets import get_dataset_config_names
 from datasets import Dataset, Features, Array2D
 
 
-from data.features.PreProcesesAudio import (
+from PreProcesesAudio import (
     MelSpec,
     Resampler 
 )
@@ -99,33 +110,47 @@ class Huggingface_Dataset:
         safe preprocessed data, not load data not needed because is catched if in constructur already
         """
         self.data.save_to_disk(directory_to_save_to)
-        
-    def pre_process(self, audio_threshold_max:int = 20, audio_threshold_min:int = 3):
+     
+     
+    @logger.catch   
+    def pre_process(self, audio_threshold_max:int = 20, audio_threshold_min:int = 3, 
+                    ):
         """
         pre_process whole dataset and save it 
         """
-        resampler = Resampler(orig_freq = self.sampling_rate)
+
+        dtype_to_resample_to = self.data[0]["audio"]["array"].dtype
+        resampler = Resampler(orig_freq = self.sampling_rate.item(), dtype = dtype_to_resample_to)
         mel_spec = MelSpec()
         
-        logger.info(f"Sampling Rate of our dataest{self.sampling_rate}")
+        path_to_save_to = "res/preprocessed" + self.name_of_dataset + "/" +  self.split   # path to save the dataset to 
         
-        for file_index in range(self.get_shape()):
+        
+        logger.info(f"Sampling Rate of our dataset {self.sampling_rate}")
+        
+        logger.debug("for loop starts")
+        breakpoint()
+        for file_index in range(self.get_shape()[0]):
+            if file_index == 10:
+                break
+            duration_of_current_file = self.data[file_index]["audio_duration"].item()
             
-            if audio_threshold_max >= self.data["audio_duration"] > audio_threshold_min:
-                logger.info(f"File with index:{file_index}, in Dataset: {}") # log index of data that is too long or too short
-            else:
-                self.data[file_index] = Resampler(self.data[file_index]["audio"]["array"])
-                logger.debug()
-                self.data[file_index] = rearrange()
-                logger.debug()
-                self.data[file_index] = MelSpec(self.data[file_index]["audio"]["array"])
+            if audio_threshold_max >= duration_of_current_file > audio_threshold_min:
                 
-            
-            
+                logger.info(f"File with index: {file_index}, in Dataset: {self.name_of_dataset, self.split}, has duration:{duration_of_current_file}, it will be used !") # log index of data that is too long or too short
+                
+                self.data[file_index]["audio"]["array"] = resampler.forward(self.data[file_index]["audio"]["array"])
+                breakpoint()
+                self.data[file_index] = rearrange(self.data[file_index]["audio"]["array"], "t -> 1 t")
+                
+                self.data[file_index] = mel_spec.forward(self.data[file_index]["audio"]["array"])
+                
+            else:
+                logger.info(f"File with index: {file_index}, in Dataset: {self.name_of_dataset, self.split}, has duration:{duration_of_current_file}, and will not be used!")
+        logger.info()   
         
-
+        breakpoint()
         
-    
     def get_dataset(self) -> datasets.dataset_dict:
         """
         get an already existing Dataset that was also downloaded        
@@ -161,13 +186,17 @@ facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_lib
                                        split = "train",
                                        cache_dir = "res/example/train")
                                        
-common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_voice_17_0",
-                                   if_stream = False, 
-                                   language = "de",
-                                   split = "train"
-                                   chach_dir = "res/example/train")           
+#common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_voice_17_0",
+                      #             if_stream = False, 
+                       #            language = "de",
+                        #           split = "train"
+                         #          chach_dir = "res/example/train")           
                             
 facebook_german.remove_columns(columns_to_remove=columns_to_remove)
 
-facebook_german.safe_data("/home/dheinz/Documents/GermanTTS/res/example/")
+facebook_german.pre_process()
+
+
+print("successful run")
+
 
