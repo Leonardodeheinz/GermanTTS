@@ -10,11 +10,14 @@ dt - dimension text
 """
 
 # usefull functions from huggingface
+from random import sample
 from datasets import load_dataset
+from datasets import load_from_disk
 from datasets import get_dataset_split_names
 from datasets import get_dataset_config_names
 from datasets import Dataset, Features, Array2D
-
+from functools import cache, partial
+import os
 
 from PreProcesesAudio import (
     MelSpec,
@@ -48,7 +51,7 @@ class Huggingface_Dataset:
     
     """
     
-    def __init__(
+    def __init__(  #TODO read the data_dir also for pre_processed data
         self,
         name_of_dataset:str,
         #min_duration:float = 0,     # min 
@@ -58,8 +61,8 @@ class Huggingface_Dataset:
         split:str = "",
         cache_dir:str = "",
     ):
-        # download specific settings
-       
+           
+              
         self.if_stream = if_stream  # maybe not neccessary if will just have it already available
         self.language = language  # specify language to load 
         self.split = split  # train, dev or test
@@ -68,7 +71,9 @@ class Huggingface_Dataset:
                
         # check if datset is already loaded in cache
         if os.path.isdir(cache_dir):
-            self.data = load_dataset(path = name_of_dataset, cache_dir=cache_dir)
+            self.data = load_dataset(path = name_of_dataset, 
+                                     name = self.language, 
+                                     cache_dir=cache_dir)
         else:  # relead dataset if not already done
             self.data = load_dataset(path = self.name_of_dataset,
                                      name = self.language,
@@ -80,8 +85,8 @@ class Huggingface_Dataset:
         
         # basic information for the preprocessing
         self.sampling_rate = self.data[0]["audio"]["sampling_rate"]
-        
-     
+        self.dtype_to_resample_to = self.data[0]["audio"]["array"].dtype
+        breakpoint()
         
         
     def get_data(self):
@@ -110,46 +115,40 @@ class Huggingface_Dataset:
         safe preprocessed data, not load data not needed because is catched if in constructur already
         """
         self.data.save_to_disk(directory_to_save_to)
-     
-     
-    @logger.catch   
-    def pre_process(self, audio_threshold_max:int = 20, audio_threshold_min:int = 3, 
-                    ):
-        """
-        pre_process whole dataset and save it 
-        """
+    
+    
 
-        dtype_to_resample_to = self.data[0]["audio"]["array"].dtype
-        resampler = Resampler(orig_freq = self.sampling_rate.item(), dtype = dtype_to_resample_to)
-        mel_spec = MelSpec()
+    @logger.catch
+    def process_dataset(self, num_proc=4, batch_size = 4, make_preprocessor = None, safe_data_path:str = ""):
+        """ give any function and it will tranform the data
+            and store the transformed data in a new path so that it is very easy to access later on.
+        Args:
+            num_proc (int, optional): _description_. Defaults to 4.
+            batch_size (int, optional): _description_. Defaults to 4.
+            columns_to_remove (_type_, optional): _description_. Defaults to None.
+            make_preprocessor (_type_, optional): _description_. Defaults to None.
+        """
         
-        path_to_save_to = "res/preprocessed" + self.name_of_dataset + "/" +  self.split   # path to save the dataset to 
         
         
-        logger.info(f"Sampling Rate of our dataset {self.sampling_rate}")
-        
-        logger.debug("for loop starts")
+        preprocessor = partial(make_preprocessor, orig_freq = 16_000, audio_threshold_max = 20, audio_threshold_min = 3)
+        logger.info(f"num_proc: {num_proc}, batch_size: {batch_size}, Preprocessing starts, data_size: {self.data.shape}")
         breakpoint()
-        for file_index in range(self.get_shape()[0]):
-            if file_index == 10:
-                break
-            duration_of_current_file = self.data[file_index]["audio_duration"].item()
-            
-            if audio_threshold_max >= duration_of_current_file > audio_threshold_min:
-                
-                logger.info(f"File with index: {file_index}, in Dataset: {self.name_of_dataset, self.split}, has duration:{duration_of_current_file}, it will be used !") # log index of data that is too long or too short
-                
-                self.data[file_index]["audio"]["array"] = resampler.forward(self.data[file_index]["audio"]["array"])
-                breakpoint()
-                self.data[file_index] = rearrange(self.data[file_index]["audio"]["array"], "t -> 1 t")
-                
-                self.data[file_index] = mel_spec.forward(self.data[file_index]["audio"]["array"])
-                
-            else:
-                logger.info(f"File with index: {file_index}, in Dataset: {self.name_of_dataset, self.split}, has duration:{duration_of_current_file}, and will not be used!")
-        logger.info()   
+        self.data = self.data.map(preprocessor,
+                                  batched = True,
+                                  batch_size = batch_size, 
+                                  num_proc= num_proc,
+                                  remove_columns=self.data.column_names,
+                                  load_from_cache_file=False, 
+                                  keep_in_memory= True
+                                  )
+        breakpoint()
+        # safe data if data path is provided
+        if os.path.exists(safe_data_path):
+            self.__safe_data__(safe_data_path)
         
         breakpoint()
+        
         
     def get_dataset(self) -> datasets.dataset_dict:
         """
@@ -163,7 +162,7 @@ class Huggingface_Dataset:
         """
         This function should group data of one specific speaker, e.g. for OrpheusTTS training
         """
-        
+        pass
     
     
     def plot_mel_spectrogram(self,mel_spec, t, sr=24_000, n_mels=80):
@@ -176,27 +175,73 @@ class Huggingface_Dataset:
         plt.title("Mel Spectrogram")
         plt.show()
 
+    def group_data(self, speaker_id):
+        """Group data by speaker_id for example 300 samples of one exact speaker
 
+        Returns:
+            _type_: _description_
+        """ 
+        filterd_data = self.data.filter(lambda example: example["speaker_id"] == speaker_id)
+        return filterd_data
 
-columns_to_remove = ["original_path", "file", "id","chapter_id"]
+  
+    
+# define preprocess functions
 
-facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
-                                       if_stream = False,
-                                       language = 'german', 
-                                       split = "train",
-                                       cache_dir = "res/example/train")
+def preprocess_facebook_librispeech(batch, orig_freq=None, audio_threshold_max=20, audio_threshold_min=3):
+    resampler = Resampler(orig_freq=orig_freq, new_freq=24_000)
+    melspec = MelSpec(sampling_rate=orig_freq)
+
+    audio_arrays = batch["audio"]
+    audio_duration = batch["audio_duration"]
+
+    mels = []
+
+    logger.info("PreProcessing starts")
+    for index in range(len(audio_arrays)):
+        if audio_threshold_min < audio_duration[index] <= audio_threshold_max:
+            audio_array = audio_arrays[index]["array"]
+
+            audio_array = resampler.forward(audio_array)
+            audio_array = rearrange(audio_array, "t -> 1 t")
+            audio_array = melspec.forward(audio_array)
+            mel_spec_array = rearrange(audio_array, "1 d t -> d t")
+            logger.info(f"mel_spec_array shape: {mel_spec_array.shape}")
+
+            mels.append(mel_spec_array)
+        else:
+            logger.info(f"File skipped (duration: {audio_duration[index]})")
+            mels.append(None)  # Maintain alignment
+
+    return {
+        "mel": mels,
+        "transcript": batch["transcript"],
+        "speaker_id": batch["speaker_id"]
+    }
+    
+    
+def preprocess_commonvoice(batch, orig_freq=None, audio_threshold_max=20, audio_threshold_min=3):
+    resampler = Resampler
+#columns_to_remove = ["original_path", "file", "id","chapter_id"]
+
+# facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
+#                                       if_stream = False,
+#                                       language = "german", 
+#                                       split = "1_hours",
+#                                       cache_dir = "/home/dheinz/Documents/GermanTTS/res/example/1_hours",
+#                                       )
                                        
-#common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_voice_17_0",
-                      #             if_stream = False, 
-                       #            language = "de",
-                        #           split = "train"
-                         #          chach_dir = "res/example/train")           
-                            
-facebook_german.remove_columns(columns_to_remove=columns_to_remove)
-
-facebook_german.pre_process()
+common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_voice_17_0",
+                                    if_stream = False, 
+                                    language = "de",
+                                     split = "train",
+                                    cache_dir = "res/example/train")           
 
 
+#facebook_german.process_dataset(num_proc=1, batch_size= 16, make_preprocessor = preprocess_facebook_librispeech, safe_data_path= "/home/dheinz/Documents/GermanTTS/res/example/1_hours")
+
+
+#filterd_dataset = load_from_disk("/home/dheinz/Documents/GermanTTS/res/example/1_hours")
+breakpoint()
 print("successful run")
-
 

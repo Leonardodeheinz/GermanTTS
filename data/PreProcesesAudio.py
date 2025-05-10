@@ -17,6 +17,7 @@ from torchaudio.transforms import MelSpectrogram # torchaudio imports
 from torchaudio.transforms import Resample
 from torch import nn, tensor, Tensor, from_numpy
 from einops import rearrange, repeat, reduce, einsum, pack, unpack
+from loguru import logger
 
 class MelSpec(Module):
 
@@ -24,7 +25,7 @@ class MelSpec(Module):
                  hop_length:int = 256, 
                  win_length:int = 1024, 
                  n_mel_channels:int = 100, 
-                 sampling_rate:int = 24_000, 
+                 sampling_rate:int = 24_000,
                  normalize:bool = False, power:int = 1, center:bool = True, norm = None
                 ):
                 
@@ -32,6 +33,7 @@ class MelSpec(Module):
                 
                 self.n_mel_channels = n_mel_channels
                 self.sampling_rate = sampling_rate
+                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 
                 self.mel_stft = MelSpectrogram(
                     sample_rate = self.sampling_rate, 
@@ -43,11 +45,12 @@ class MelSpec(Module):
                     center = center,
                     normalized= normalize,
                     norm=norm
-                )
+                ).to(self.device)
                 
                 self.register_buffer("dummy" , tensor(0), persistent = False)
     
     def forward(self, inp):
+        #logger.info(f"inp shape: {inp.shape}")
         if len(inp.shape) == 3:
             inp = rearrange(inp, 'b 1 w -> b nw')
         
@@ -56,9 +59,13 @@ class MelSpec(Module):
         if self.dummy.device != inp.device:
             self.to(inp.device)
         
+        inp = inp.to(self.device)
+        
         mel = self.mel_stft(inp)
-        mel = self.log(mel)    
-        return mel
+        
+        mel = self.log(mel)
+        #logger.info(f"MelSpectogram shape: {mel.shape}")    
+        return mel.cpu()
     
     def log(self, mel_tensor, eps=1e-5):
         """
@@ -106,5 +113,6 @@ class Resampler(Module):
         Args:
             raw_tensor (torch.tensor): raw tensor to resample 
         """
-
-        return self.resampler(raw_tensor)
+        
+        new_tensor = self.resampler(raw_tensor)    
+        return new_tensor

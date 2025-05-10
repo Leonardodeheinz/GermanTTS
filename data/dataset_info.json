@@ -1,0 +1,404 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "german",
+  "dataset_name": "multilingual_librispeech",
+  "dataset_size": 31672534917,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/dev-00000-of-00001.parquet": {
+      "num_bytes": 223322376,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/test-00000-of-00001.parquet": {
+      "num_bytes": 224781063,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00000-of-00063.parquet": {
+      "num_bytes": 485607702,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00001-of-00063.parquet": {
+      "num_bytes": 482283908,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00002-of-00063.parquet": {
+      "num_bytes": 494317769,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00003-of-00063.parquet": {
+      "num_bytes": 484517208,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00004-of-00063.parquet": {
+      "num_bytes": 488852814,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00005-of-00063.parquet": {
+      "num_bytes": 484962750,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00006-of-00063.parquet": {
+      "num_bytes": 490541741,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00007-of-00063.parquet": {
+      "num_bytes": 486811863,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00008-of-00063.parquet": {
+      "num_bytes": 482252755,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00009-of-00063.parquet": {
+      "num_bytes": 493812066,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00010-of-00063.parquet": {
+      "num_bytes": 494055172,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00011-of-00063.parquet": {
+      "num_bytes": 486836399,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00012-of-00063.parquet": {
+      "num_bytes": 492403233,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00013-of-00063.parquet": {
+      "num_bytes": 494340638,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00014-of-00063.parquet": {
+      "num_bytes": 491186440,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00015-of-00063.parquet": {
+      "num_bytes": 496073378,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00016-of-00063.parquet": {
+      "num_bytes": 501848008,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00017-of-00063.parquet": {
+      "num_bytes": 497705240,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00018-of-00063.parquet": {
+      "num_bytes": 523734810,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00019-of-00063.parquet": {
+      "num_bytes": 498755781,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00020-of-00063.parquet": {
+      "num_bytes": 509145636,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00021-of-00063.parquet": {
+      "num_bytes": 494938274,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00022-of-00063.parquet": {
+      "num_bytes": 483558699,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00023-of-00063.parquet": {
+      "num_bytes": 499979923,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00024-of-00063.parquet": {
+      "num_bytes": 505440243,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00025-of-00063.parquet": {
+      "num_bytes": 498612943,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00026-of-00063.parquet": {
+      "num_bytes": 492257816,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00027-of-00063.parquet": {
+      "num_bytes": 502063996,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00028-of-00063.parquet": {
+      "num_bytes": 497346325,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00029-of-00063.parquet": {
+      "num_bytes": 492528377,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00030-of-00063.parquet": {
+      "num_bytes": 488511741,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00031-of-00063.parquet": {
+      "num_bytes": 488591931,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00032-of-00063.parquet": {
+      "num_bytes": 488491414,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00033-of-00063.parquet": {
+      "num_bytes": 493062108,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00034-of-00063.parquet": {
+      "num_bytes": 491953231,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00035-of-00063.parquet": {
+      "num_bytes": 489090739,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00036-of-00063.parquet": {
+      "num_bytes": 485881244,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00037-of-00063.parquet": {
+      "num_bytes": 491570908,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00038-of-00063.parquet": {
+      "num_bytes": 488621596,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00039-of-00063.parquet": {
+      "num_bytes": 487410099,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00040-of-00063.parquet": {
+      "num_bytes": 485293978,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00041-of-00063.parquet": {
+      "num_bytes": 489573185,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00042-of-00063.parquet": {
+      "num_bytes": 486928190,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00043-of-00063.parquet": {
+      "num_bytes": 490619931,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00044-of-00063.parquet": {
+      "num_bytes": 486647023,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00045-of-00063.parquet": {
+      "num_bytes": 490454293,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00046-of-00063.parquet": {
+      "num_bytes": 485753263,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00047-of-00063.parquet": {
+      "num_bytes": 492381435,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00048-of-00063.parquet": {
+      "num_bytes": 484594575,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00049-of-00063.parquet": {
+      "num_bytes": 489649210,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00050-of-00063.parquet": {
+      "num_bytes": 485763119,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00051-of-00063.parquet": {
+      "num_bytes": 487659682,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00052-of-00063.parquet": {
+      "num_bytes": 492042368,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00053-of-00063.parquet": {
+      "num_bytes": 487175554,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00054-of-00063.parquet": {
+      "num_bytes": 489297210,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00055-of-00063.parquet": {
+      "num_bytes": 485027399,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00056-of-00063.parquet": {
+      "num_bytes": 482723595,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00057-of-00063.parquet": {
+      "num_bytes": 488846880,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00058-of-00063.parquet": {
+      "num_bytes": 480774681,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00059-of-00063.parquet": {
+      "num_bytes": 481720571,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00060-of-00063.parquet": {
+      "num_bytes": 486014021,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00061-of-00063.parquet": {
+      "num_bytes": 487553557,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/train-00062-of-00063.parquet": {
+      "num_bytes": 483725221,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/9_hours-00000-of-00001.parquet": {
+      "num_bytes": 142227391,
+      "checksum": null
+    },
+    "hf://datasets/facebook/multilingual_librispeech@2e83e61823b4c47dcbcb1980bb88601274127609/german/1_hours-00000-of-00001.parquet": {
+      "num_bytes": 15655132,
+      "checksum": null
+    }
+  },
+  "download_size": 31526161821,
+  "features": {
+    "transcript": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "speaker_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "mel": {
+      "feature": {
+        "feature": {
+          "dtype": "float32",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "_type": "Sequence"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 63198696738,
+  "splits": {
+    "dev": {
+      "name": "dev",
+      "num_bytes": 224385274,
+      "num_examples": 3469,
+      "dataset_name": "multilingual_librispeech"
+    },
+    "test": {
+      "name": "test",
+      "num_bytes": 225841957,
+      "num_examples": 3394,
+      "dataset_name": "multilingual_librispeech"
+    },
+    "train": {
+      "name": "train",
+      "num_bytes": 31063753152,
+      "num_examples": 469942,
+      "shard_lengths": [
+        7660,
+        7760,
+        7560,
+        7660,
+        7660,
+        7660,
+        7560,
+        7760,
+        7660,
+        7460,
+        7660,
+        7660,
+        7660,
+        7560,
+        7560,
+        7460,
+        7460,
+        7460,
+        7260,
+        7360,
+        7360,
+        7660,
+        7660,
+        7360,
+        7560,
+        7559,
+        7559,
+        7559,
+        7559,
+        7559,
+        7659,
+        7659,
+        7659,
+        7659,
+        7559,
+        7659,
+        7659,
+        7659,
+        7659,
+        7659,
+        7659,
+        7659,
+        7659,
+        7659,
+        7559,
+        7759,
+        7559,
+        7759,
+        7659,
+        7659,
+        7659,
+        7559,
+        7618,
+        7659,
+        7659,
+        7759,
+        7659,
+        7759,
+        7759,
+        7659,
+        7659,
+        5559
+      ],
+      "dataset_name": "multilingual_librispeech"
+    },
+    "9_hours": {
+      "name": "9_hours",
+      "num_bytes": 142833585,
+      "num_examples": 2194,
+      "dataset_name": "multilingual_librispeech"
+    },
+    "1_hours": {
+      "name": "1_hours",
+      "num_bytes": 15720949,
+      "num_examples": 241,
+      "dataset_name": "multilingual_librispeech"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
