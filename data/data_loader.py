@@ -221,7 +221,9 @@ def preprocess_facebook_librispeech(batch, orig_freq=None, audio_threshold_max=2
     
     
 def preprocess_commonvoice(batch, orig_freq=None, audio_threshold_max=20, audio_threshold_min=3):
-    resampler = Resampler
+    resampler = Resampler(orig_freq=orig_freq, new_freq=24_000)
+    melspec = MelSpec(sampling_rate=orig_freq)
+    pass
 #columns_to_remove = ["original_path", "file", "id","chapter_id"]
 
 # facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
@@ -241,7 +243,7 @@ common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_
 #facebook_german.process_dataset(num_proc=1, batch_size= 16, make_preprocessor = preprocess_facebook_librispeech, safe_data_path= "/home/dheinz/Documents/GermanTTS/res/example/1_hours")
 
 
-#filterd_dataset = load_from_disk("/home/dheinz/Documents/GermanTTS/res/example/1_hours")
+filterd_dataset = load_from_disk("/home/dheinz/Documents/GermanTTS/res/example/1_hours")
 breakpoint()
 print("successful run")
 

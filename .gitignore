@@ -1,2 +1,5 @@
 *logs
 *res
+*pytest_cache
+*__pycache__
+*sample_client
