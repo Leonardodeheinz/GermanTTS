@@ -1,0 +1,317 @@
+{
+  "builder_name": "common_voice_17_0",
+  "citation": "@inproceedings{commonvoice:2020,\n  author = {Ardila, R. and Branson, M. and Davis, K. and Henretty, M. and Kohler, M. and Meyer, J. and Morais, R. and Saunders, L. and Tyers, F. M. and Weber, G.},\n  title = {Common Voice: A Massively-Multilingual Speech Corpus},\n  booktitle = {Proceedings of the 12th Conference on Language Resources and Evaluation (LREC 2020)},\n  pages = {4211--4215},\n  year = 2020\n}\n",
+  "config_name": "de",
+  "dataset_name": "common_voice_17_0",
+  "dataset_size": 3624811012,
+  "description": "Common Voice is Mozilla's initiative to help teach machines how real people speak. The dataset currently consists of 20408 validated hours of speech  in 124 languages, but more voices and languages are always added.",
+  "download_checksums": {
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/n_shards.json": {
+      "num_bytes": 17491,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_0.tar": {
+      "num_bytes": 1707919360,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_1.tar": {
+      "num_bytes": 1656320000,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_2.tar": {
+      "num_bytes": 1638922240,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_3.tar": {
+      "num_bytes": 1602693120,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_4.tar": {
+      "num_bytes": 1555118080,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_5.tar": {
+      "num_bytes": 1571225600,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_6.tar": {
+      "num_bytes": 1508495360,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_7.tar": {
+      "num_bytes": 1603758080,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_8.tar": {
+      "num_bytes": 1545226240,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_9.tar": {
+      "num_bytes": 1606533120,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_10.tar": {
+      "num_bytes": 1408993280,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_11.tar": {
+      "num_bytes": 1443706880,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_12.tar": {
+      "num_bytes": 1564016640,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_13.tar": {
+      "num_bytes": 2159124480,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/train/de_train_14.tar": {
+      "num_bytes": 1098035200,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/dev/de_dev_0.tar": {
+      "num_bytes": 712601600,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/test/de_test_0.tar": {
+      "num_bytes": 717383680,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/other/de_other_0.tar": {
+      "num_bytes": 245708800,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/invalidated/de_invalidated_0.tar": {
+      "num_bytes": 1734533120,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/invalidated/de_invalidated_1.tar": {
+      "num_bytes": 566282240,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_0.tar": {
+      "num_bytes": 1694494720,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_1.tar": {
+      "num_bytes": 1611366400,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_2.tar": {
+      "num_bytes": 1559828480,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_3.tar": {
+      "num_bytes": 1543065600,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_4.tar": {
+      "num_bytes": 1556131840,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_5.tar": {
+      "num_bytes": 1524295680,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_6.tar": {
+      "num_bytes": 1501962240,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_7.tar": {
+      "num_bytes": 1465364480,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_8.tar": {
+      "num_bytes": 1469153280,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_9.tar": {
+      "num_bytes": 1444792320,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_10.tar": {
+      "num_bytes": 1409525760,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_11.tar": {
+      "num_bytes": 1425541120,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_12.tar": {
+      "num_bytes": 1502976000,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_13.tar": {
+      "num_bytes": 1544212480,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_14.tar": {
+      "num_bytes": 1442385920,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_15.tar": {
+      "num_bytes": 1494425600,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_16.tar": {
+      "num_bytes": 1416714240,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_17.tar": {
+      "num_bytes": 1413365760,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_18.tar": {
+      "num_bytes": 1350830080,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_19.tar": {
+      "num_bytes": 1458145280,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_20.tar": {
+      "num_bytes": 1617960960,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_21.tar": {
+      "num_bytes": 2053980160,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/audio/de/validated/de_validated_22.tar": {
+      "num_bytes": 1508167680,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/transcript/de/train.tsv": {
+      "num_bytes": 199419221,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/transcript/de/dev.tsv": {
+      "num_bytes": 5008597,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/transcript/de/test.tsv": {
+      "num_bytes": 4974826,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/transcript/de/other.tsv": {
+      "num_bytes": 2392553,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/transcript/de/invalidated.tsv": {
+      "num_bytes": 17987030,
+      "checksum": null
+    },
+    "https://huggingface.co/datasets/mozilla-foundation/common_voice_17_0/resolve/main/transcript/de/validated.tsv": {
+      "num_bytes": 303499990,
+      "checksum": null
+    }
+  },
+  "download_size": 63188582908,
+  "features": {
+    "client_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "path": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "audio": {
+      "sampling_rate": 48000,
+      "_type": "Audio"
+    },
+    "sentence": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "up_votes": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "down_votes": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "age": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "gender": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "accent": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "locale": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "segment": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "variant": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "https://commonvoice.mozilla.org/en/datasets",
+  "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "size_in_bytes": 66813393920,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 366585618,
+      "num_examples": 589100,
+      "dataset_name": "common_voice_17_0"
+    },
+    "validation": {
+      "name": "validation",
+      "num_bytes": 9525563,
+      "num_examples": 16183,
+      "dataset_name": "common_voice_17_0"
+    },
+    "test": {
+      "name": "test",
+      "num_bytes": 9524124,
+      "num_examples": 16183,
+      "dataset_name": "common_voice_17_0"
+    },
+    "other": {
+      "name": "other",
+      "num_bytes": 4407094,
+      "num_examples": 7116,
+      "dataset_name": "common_voice_17_0"
+    },
+    "invalidated": {
+      "name": "invalidated",
+      "num_bytes": 34145246,
+      "num_examples": 54751,
+      "dataset_name": "common_voice_17_0"
+    },
+    "validated": {
+      "name": "validated",
+      "num_bytes": 3200623367,
+      "num_examples": 917350,
+      "shard_lengths": [
+        66000,
+        13000,
+        361000,
+        447000,
+        12000,
+        15000,
+        3350
+      ],
+      "dataset_name": "common_voice_17_0"
+    }
+  },
+  "version": {
+    "version_str": "17.0.0",
+    "major": 17,
+    "minor": 0,
+    "patch": 0
+  }
+}

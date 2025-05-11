@@ -1,0 +1,3 @@
+[submodule "FF5-TTS Repository"]
+    path = FF5-TTS
+    url = https://github.com/SWivid/F5-TTS.git
