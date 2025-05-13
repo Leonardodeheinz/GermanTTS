@@ -32,7 +32,7 @@ def test_pipeline_resample_and_melspec(dummy_signal, sampling_rates):
     assert isinstance(resampled, torch.Tensor)
     assert resampled.ndim == 2  # (1, new_time)
     assert resampled.shape[1] > 0, "Resampled waveform is empty"
-
+    
     # Step 2: Mel Spectrogram
     melspec = MelSpec(sampling_rate=target_sr)
     mel_output = melspec.forward(resampled)
