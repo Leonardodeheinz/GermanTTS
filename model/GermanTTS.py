@@ -7,6 +7,7 @@ nt - text sequence
 nw - raw wave length
 d - dimension
 dt - dimension text
+c - channel dimensions
 """
 # neural network libaries
 from ast import Module
@@ -45,7 +46,9 @@ def default(v,d):
     return v if exists(v) else d
 
 def divisible_by(num, den):
-    return (num & den) == 0
+    return (num % den) == 0
+
+divisible_by(4,2)
 
 def xnor(x,y):
     return not (x ^ y)
@@ -103,7 +106,7 @@ class ConvNeXtV2Block(nnx.Module):
     def __call__(self, x:jnp.ndarray) -> jnp.ndarray:
         residual = x
         x = rearrange(x, "b n d -> b d n")
-        x = self.dwconv(x)
+        x = self.dwconv(x)                      #TODO: Check the dimensions of the input and output
         x = rearrange(x, "b d n -> b n d")
         x = self.norm(x)
         x = self.pwconv1(x)
@@ -120,11 +123,63 @@ class SinusPositonalEmbedding(nnx.Module):
     def __call__(self, x:jnp.ndarray, scale = 1000):
         device = x.device
         half_dim = self.dim // 2
-        emb = jnp.log(10_000) / half_dim - 1
+        emb = jnp.log(10_000) / half_dim - 1                                # TODO: check if output and input are valid
         emb = jnp.exp(jnp.arange(half_dim, device = device).float() * -emb)
+        emb = scale * jnp.expand_dims(x, 1) * jnp.expand_dims(emb, 0)
+        emb = jnp.concat((jnp.sin(emb),jnp.cos(emb)), axis = 1)
+
+
+
+class ConvPositionalEmbedding(nnx.Module):
+    def __init__(self, dim:int, kernel_size=31, groups=16)
+        assert divisible_by(dim, 2)
+        padding_size = kernel_size // 2
+        self.conv1d = nnx.Sequential(
+            nnx.Conv(dim, dim, kernel_size = kernel_size, groups = groups, padding = padding_size),
+            jax.nn.mish(), #noqa F722
+            nnx.Conv(dim, dim, kernel_size = kernel_size, groups = groups, padding = padding_size),
+            jax.nn.mish()
+        )
+    def __call__(self, x:float["b n d"], mask:bool["b n"] | None = None):
+        if exists(mask):
+            mask = mask[..., None]
+            jnp.where(mask, x,0.0)
         
+        x = rearrange(x, "b n d -> b d n")
+        x = self.conv1d(x)                      # TODO: check the permutations, not sure if right, maybe in test_pipeline
+        x = rearrange(x, "b d n -> b n d")
+
+        if exists(mask):
+            out = jnp.where(mask , x, 0.0)      # TODO: here also check the dimensions
+            
+        return out 
+
+
+class AdaLayernNormZero(nnx.Module):
+    
+    def __init__(self, dim:int, dim_condition:int):
+     
+      
+        self.linear = nnx.Linear(dim, dim * 2)
         
+        self.norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False,  epsilon = 1e-6)
         
+    def __call__(self, x, emb):
+        
+        emb = self.linear(nnx.silu(emb))
+        
+        scale, shift = jnp.split(emb, 2, axis=-1)
+        
+        normed_x = self.norm(x)
+        
+        scale_expanded = jnp.expand_dims(scale, axis = 1)
+        shift_expanded = jnp.expand_dims(shift, axis = 1)
+        
+        output = normed_x * (1 + scale_expanded) + shift_expanded 
+        return output
+        import jax
+
+
 
 
 import jax.numpy as jnp
