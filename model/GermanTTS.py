@@ -11,8 +11,11 @@ c - channel dimensions
 """
 # neural network libaries
 from ast import Module
+from os import device_encoding
+from re import S
 from statistics import mean
 from tokenize import group
+from wsgiref import headers
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -114,7 +117,10 @@ class ConvNeXtV2Block(nnx.Module):
         x = self.grn(x)
         x = self.pwconv2(x)
         return residual + x
-        
+
+# Definition of the embeddings
+
+# sinusoidal position embedding
 
 class SinusPositonalEmbedding(nnx.Module):
     def __init__(self, dim:int):
@@ -127,8 +133,9 @@ class SinusPositonalEmbedding(nnx.Module):
         emb = jnp.exp(jnp.arange(half_dim, device = device).float() * -emb)
         emb = scale * jnp.expand_dims(x, 1) * jnp.expand_dims(emb, 0)
         emb = jnp.concat((jnp.sin(emb),jnp.cos(emb)), axis = 1)
+        return emb
 
-
+# Convolutional postion embedding
 
 class ConvPositionalEmbedding(nnx.Module):
     def __init__(self, dim:int, kernel_size=31, groups=16)
@@ -153,6 +160,109 @@ class ConvPositionalEmbedding(nnx.Module):
             out = jnp.where(mask , x, 0.0)      # TODO: here also check the dimensions
             
         return out 
+    
+    
+class TimestepEmbedding(nnx.Module):
+    
+    def __init__(self, dim, freq_ebmed_dim=256):
+        self.time_embed = SinusPositonalEmbedding(freq_ebmed_dim)
+        self.time_mlp = nnx.Sequential(nnx.Linear(freq_ebmed_dim, dim), nnx.silu(), nnx.Linear(dim, dim))
+        
+    def __call__(self, timestep:float["b"]): 
+        time_hidden = self.time_embed(timestep)
+        time_hidden = time_hidden.to(timestep.dtype)
+        time = self.time_mlp(time_hidden)
+        return time
+    
+# feed forward class 
+
+class FeedForward(nnx.Module):
+    
+    def __init__(self, dim, dim_out = None, mult = 4, dropout = 0.0, approximate:str = "none"):
+        inner_dim = int(dim * mult)
+        if not dim_out:
+            pass
+        else:
+            dim_out = dim
+        
+        activation = nnx.gelu(approximate=approximate)
+        project_fn = nnx.Sequential(nnx.Linear(dim, inner_dim), activation)
+        self.ff = nnx.Sequential(project_fn, nnx.Dropout(dropout), nnx.Linear(inner_dim, dim_out))
+
+    def forward(self,x):
+        return self.ff(x)    
+    
+# attention
+
+class Attention(nnx.Module):
+    
+    def __init__(self, dim:int, heads:int = 8, dim_head:int = 64, dropout:float = 0.0):
+        """Standard attention Block for our 
+
+        Args:
+            dim (int): _description_
+            head (int, optional): _description_. Defaults to 8.
+            dim_head (int, optional): _description_. Defaults to 64.
+            dropout (float, optional): _description_. Defaults to 0.0.
+
+        Returns:
+            _type_: _description_
+        """
+        
+        self.dim = dim 
+        self.heads = heads 
+        self.inner_dim = dim_head * heads
+        self.droput = dropoutƒ
+        
+        self.to_q = nnx.Linear(dim, self.inner_dim)
+        self.to_k = nnx.Linear(dim, self.inner_dim)
+        self.to_v = nnx.Linear(dim, self.inner_dim)
+        
+        self.to_out = nnx.Sequential(nnx.Linear(self.inner_dim, dim, bias = False), nnx.Dropout(dropout))
+    
+    
+    def __call__(self, 
+                x:float["b n d"],
+                mask: bool["b n"] | None = None,
+                rope = None,
+                ) -> jnp.array:
+        batch_size = x.shape[0]
+
+        query = self.to_q(x)
+        key = self.to_k(x)
+        values = self.to_v(x)
+        
+        if rope is not None:        # TODO: change this code block since it is wrong and only coppied from the original.
+            # freqs, xpos_scale = rope         
+            # q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+
+            # query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
+            # key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
+            query = None
+            key = None
+
+    
+        query = rearrange(query, "b n (h d) -> b h n d", h=self.heads)
+        key =   rearrange(key, "b n (h d) -> b n h d", h=self.heads)
+        value = rearrange(value, "b n (h d) -> b h n d", h=self.heads)
+        
+        if mask is not None:
+            attn_mask = rearrange(mask, "b n -> b 1 1 n")
+            attn_mask = attn_mask.expand(batch_size, self.heads, query.shape[-2], key.shape[-2])
+        else:
+            attn_mask = None
+            
+        x = nnx.dot_product_attention(query, key, value, bias = None, dropout_rng)
+        
+        
+        
+    
+    
+    
+    
+    
+    
+        
 
 
 class AdaLayernNormZero(nnx.Module):
@@ -177,16 +287,7 @@ class AdaLayernNormZero(nnx.Module):
         
         output = normed_x * (1 + scale_expanded) + shift_expanded 
         return output
-        import jax
-
-
-
-
-import jax.numpy as jnp
-import jax
-jax.devices("cpu")
-arr = jnp.array([1,2,3])
-print(arr.device)
+        
 
 
 
