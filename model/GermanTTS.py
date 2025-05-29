@@ -11,6 +11,7 @@ c - channel dimensions
 """
 # neural network libaries
 from ast import Module
+from asyncio import constants
 from os import device_encoding
 from re import S
 from statistics import mean
@@ -138,7 +139,7 @@ class SinusPositonalEmbedding(nnx.Module):
 # Convolutional postion embedding
 
 class ConvPositionalEmbedding(nnx.Module):
-    def __init__(self, dim:int, kernel_size=31, groups=16)
+    def __init__(self, dim:int, kernel_size=31, groups=16):
         assert divisible_by(dim, 2)
         padding_size = kernel_size // 2
         self.conv1d = nnx.Sequential(
@@ -157,7 +158,7 @@ class ConvPositionalEmbedding(nnx.Module):
         x = rearrange(x, "b d n -> b n d")
 
         if exists(mask):
-            out = jnp.where(mask , x, 0.0)      # TODO: here also check the dimensions
+            out = jnp.where(mask , x, fill_value = 0.0)      # TODO: here also check the dimensions
             
         return out 
     
@@ -252,16 +253,120 @@ class Attention(nnx.Module):
         else:
             attn_mask = None
             
-        x = nnx.dot_product_attention(query, key, value, bias = None, dropout_rng)
+        x = nnx.dot_product_attention(query, key, value, bias = None, dropout_rate = 0.8, deterministic = False)
         
+        x = rearrange("b h n d -> b n (h d)")
+        x = x.to(query.dtype)
         
+        if mask is not None:
+            mask = jnp.expand_dims(mask, axis = 1)
+            x = jnp.where(mask, x, fill_value = 0.0)
+            
+        return x
         
+
+# text embedding helper funcitons
+@jax.jit
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, theta_rescale_factor: float = 1.0):
+    theta *= theta_rescale_factor ** (dim / (dim - 2))
+    # Generate the frequency components
+    freqs = 1.0 / (theta ** (jnp.arange(0, dim, 2)[: (dim // 2)].astype(jnp.float32) / dim))
+    
+    # Time steps
+    t = jnp.arange(end, dtype=jnp.float32)
+
+    # Outer product to get positions * frequencies matrix
+    freqs = jnp.outer(t, freqs).astype(jnp.float32)
+
+    # Compute cos and sin components
+    freqs_cos = jnp.cos(freqs)
+    freqs_sin = jnp.sin(freqs)
+
+    # Concatenate along the last dimension
+    return jnp.concatenate([freqs_cos, freqs_sin], axis=-1)
+
+
+@jax.jit
+def get_pos_embed_indices(start, length, max_pos, scale=1.0):
+    # Make sure scale has same shape as start
+    scale = scale * jnp.ones_like(start, dtype=jnp.float32)
+    
+    # Broadcast start and range with scale
+    pos = start[:, None] + (jnp.arange(length, dtype=jnp.float32)[None, :] * scale[:, None])
+    
+    # Convert to integer indices (flooring is implicit in cast)
+    pos = pos.astype(jnp.int32)
+    
+    # Clip positions to max_pos - 1
+    pos = jnp.where(pos < max_pos, pos, max_pos - 1)
+    
+    return pos
     
     
+
+class TextEmbedding(nnx.Module):
     
     
+    def __init__(self, text_num_embeds, text_dim, conv_layers = 0, conv_mult = 2):
+        
+        self.text_embed = jnp.take(text_num_embeds + 1, text_dim) # TODO: check how it differs to torch.nn.Embedding
+        
+        if conv_layers > 0:
+            self.extra_modelling = False
+            self.precompute_max_pos = 2048      # TODO: check how much it should differ to our, I think, what most audio is not longer than 20 seconds
+            self.buffer = {
+                "freqs_cis": precompute_freqs_cis(text_dim, self.precompute_max_pos) #precompu     # TODO: create the precompute_freqs_cis function, which precomputes the position encodings for an max size 
+            }
     
-    
+            self.text_blocks = nnx.Sequential(*[ConvNeXtV2Block(text_dim, text_dim * conv_mult) for _ in range(conv_layers)])        
+        
+        else:
+            self.extra_modelling = False
+        
+        def forward(self, text:int ["b nt"], seq_len, drop_text = False):
+            text = text + 1 
+            text = text[:, :seq_len]
+            batch, text_len = text.shape[0], text.shape[1]
+            text = jnp.pad(text, (0, seq_len - text_len), mode = "constant")  # TODO: check if paddig is alright
+
+            if drop_text:
+                text = jnp.zeros_like(text, dtype = np.int64)
+                
+            text = self.text_embed(text)
+            
+            if self.extra_modelling:
+                
+                batch_start = jnp.zeros((batch,), dtype = np.int64)
+                pox_idx = get_pos_embed_indices(batch_start, seq_len, max_pos = self.precompute_max_pos)
+                text_pos_embed = self.buffer["freq_cis"][pox_idx]
+                text = text + text_pos_embed
+                
+                text = self.text_blocks(text)
+                
+            return text
+            
+        
+# noised Inputaudio and context mising embedding
+
+class InputEmbedding(nnx.Module):
+    def __init__(self, mel_dim, text_dim, out_dim):
+        
+        self.proj = nnx.Linear(mel_dim * 2 + text_dim, out_dim)
+        self.conv_pos_embed = ConvPositionalEmbedding(dim = out_dim)
+
+    def __call__(self, 
+                 x: float["b n d"],
+                 cond:float["b n d"],
+                 text_embed:float["b n d"],
+                 drop_audio_cond = False,
+                 ):
+        if drop_audio_cond:
+            cond = jnp.zeros_like(cond)
+            
+            x = self.proj(jnp.concatenate((x, cond, text_embed), axis = -1))
+            x = self.conv_pos_embed(x) + x
+            
+            return x
         
 
 
@@ -290,73 +395,41 @@ class AdaLayernNormZero(nnx.Module):
         
 
 
+class DiTBlock(nnx.Module):
+    pass
 
+class DiT(nnx.Module):
+    pass
 
 
+def maybe_masked_mean():
+    pass
 
+class Rearrange(nnx.Module):
+    pass
 
+class DurationInputEmbedding(nnx.Module):
+    pass
 
+class DurationBlock(nnx.Module):
+    pass
 
+class DurationTransformer(nnx.Module):
+    pass
 
+class DurationPredictor(nnx.Module):
+    pass
 
+def odeint_euler():
+    pass
 
+def odeint_midpoint():
+    pass
 
+def odeint_rk4():
+    pass
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class GermanTTS(Module)
+class GermanTTS(nnx.Module):
+    pass

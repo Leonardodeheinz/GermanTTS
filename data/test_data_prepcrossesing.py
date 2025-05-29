@@ -50,7 +50,7 @@ def test_pipeline_resample_and_melspec(dummy_signal, sampling_rates):
     plt.colorbar()
     plt.title("Mel Spectrogram Output (Test)")
     plt.tight_layout()
-    plt.savefig("data/test_figs/test.png")
+    plt.savefig("test_figs/test.png")
     plt.close()
 
     print("✅ Resampler and MelSpec test passed!")
