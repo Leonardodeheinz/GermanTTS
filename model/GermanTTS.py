@@ -16,6 +16,7 @@ from os import device_encoding
 from re import S
 from statistics import mean
 from tokenize import group
+from typing import Text
 from wsgiref import headers
 import jax
 import jax.numpy as jnp
@@ -52,15 +53,31 @@ def default(v,d):
 def divisible_by(num, den):
     return (num % den) == 0
 
-divisible_by(4,2)
 
 def xnor(x,y):
     return not (x ^ y)
 
+# tensor helpers
+
+def lens_to_mask( t:int["b"],length: int | None = None,)-> bool["b n"]:
+    if not exists(length):
+        length = jnp.amax(t)
+    
+    seq = jnp.arange(length, device = t.device)
+    return seq[None, :] < t[:, None]
+
+def mask_from_start_end_indicies(start:int["b"], end:int["b"], max_seq_len:int):
+    seq = jnp.arange(max_seq_len, device=start.device, dtype = jnp.int64)
+    start_mask = seq[None,:] >= start[:, None]
+    end_mask = seq[None, :] < end[:, None]
+    return start_mask & end_mask
 
 
 
 
+class RotaryEmbedding(nnx.Module):
+    def __init__(self, dim, use_xpos, scale_base, interpolation_factor, base, base_rescale_factor):
+        pass
 
 
 
@@ -87,9 +104,10 @@ class GRN(nnx.Module):
         Gx = jnp.linalg.norm(x, "fro", axis=1, keepdim = True)
         Gx_old = jnp.array(Gx)
         Nx = Gx / Gx_old.mean(axis = 1, keepdims=True) + 1e-6
-        return self.gamma * (x * Nx) + self.beta + x 
+        out = self.gamma * (x * Nx) + self.beta + x 
+        return out
         
-        
+    
 class ConvNeXtV2Block(nnx.Module):
 
     
@@ -213,7 +231,7 @@ class Attention(nnx.Module):
         self.dim = dim 
         self.heads = heads 
         self.inner_dim = dim_head * heads
-        self.droput = dropoutƒ
+        self.droput = dropout
         
         self.to_q = nnx.Linear(dim, self.inner_dim)
         self.to_k = nnx.Linear(dim, self.inner_dim)
@@ -396,11 +414,65 @@ class AdaLayernNormZero(nnx.Module):
 
 
 class DiTBlock(nnx.Module):
-    pass
+    def __init__ (self, dim, heads, dim_head, ff_mult = 4, dropout = 0.1):
+        self.attn_norm = AdaLayernNormZero(dim)
+        self.attn = Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = dropout)
+        
+        self.ff_norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False, epsilon = 1e-6)
+        self.ff = FeedForward(dim = dim, mult = ff_mult, dropout = dropout, approxiamte = "tanh")
+    
+    def __call__ (self, x, t, mask = None, rope = None):
+        norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb = t)
+        attn_output = self.attn(x=norm, mask = mask, rope = rope)
+        x = x + jnp.expand_dims(gate_msa, axis = -1)  * attn_output
+        norm = self.ff_norm(x) * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        ff_output = self.ff(norm)
+        x = x + jnp.expand_dims(gate_mlp, axis = 1) * ff_output
+        
+        return x
 
 class DiT(nnx.Module):
-    pass
+    def __init__ (self, *, dim, depth = 8, heads = 8,dim_head = 64, dropout = 0.1, ff_mult = 4, mel_dim = 100, text_num_embeds = 256, text_dim = None, conv_layers = 0):
+        
+        if text_dim is None:
+            text_dim = mel_dim
+            
+        self.time_embed = TimestepEmbedding(dim)
+        self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers)
+        self.input_embed = InputEmbedding(mel_dim, text_dim, dim)
+        self.rotary_embed = RotaryEmbedding(dim_head)
+        
+        self.dim = dim 
+        self.depth = depth
+        
+        self.transformers_blocks = [DiTBlock(dim=dim, heads=heads,dim_head=dim_head, ff_mult=ff_mult, dropout=dropout) for _ in range(depth)]
+        
+        self.norm_out = AdaLayernNormZero(dim)
+        self.proj_out = nnx.Linear(dim, mel_dim, use_bias=False,kernel_init = nnx.initializers.lecun_normal)
+        
+    def __call__ (self, x:float["b n d"], cond:float["b n d"], text:int["b nt"], time:float["b"], drop_audio_cond, drop_text, mask:bool["b n"] | None = None):
+        
+        batch, seq_len = x.shape[0], x.shape[1]
+        
+        #if time.ndim  == 0 :                       # TODO: rewrite this condition to jax
+        # time = repeat(time, " -> b", b=batch)  
+        
+        t = self.time_embed(time)
+        text_embed = self.text_embed(text, seq_len, drop_text = drop_text)
+        x = self.input_embed(x, cond, text_embed, drop_audio_cond=drop_audio_cond)
 
+        #rope = self.rotary_embed.forward_from_seq_len(seq_len)  # TODO: not implemented yet
+
+        for block in self.transformers_blocks:
+            x = block(x, t, mask=mask, rope=None) # TODO here should be also rope parsed as argument
+            
+        x = self.norm_out(x,t)
+        output = self.proj_out(x)
+        
+        return output     
+        
+        
+        
 
 def maybe_masked_mean():
     pass
@@ -428,7 +500,6 @@ def odeint_midpoint():
 
 def odeint_rk4():
     pass
-
 
 
 class GermanTTS(nnx.Module):
