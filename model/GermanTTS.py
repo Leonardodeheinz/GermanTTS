@@ -34,6 +34,7 @@ from einops import rearrange, reduce, repeat
 import einx
 
 # retransforming mel-spectogram with neural voice encoder
+from numpy.core.umath import ndarray
 from vocos import Vocos # is pretrained
 
 # logging if needed
@@ -41,6 +42,11 @@ from loguru import logging
 
 # for the Rottary Embdedding 
 from transformers import RoFormerModel
+
+# seeds for random numbers
+
+key = 42
+
 
 # import here the helpers functions
 
@@ -58,7 +64,7 @@ def xnor(x,y):
     return not (x ^ y)
 
 # tensor helpers
-
+@jax.jit
 def lens_to_mask( t:int["b"],length: int | None = None,)-> bool["b n"]:
     if not exists(length):
         length = jnp.amax(t)
@@ -66,19 +72,77 @@ def lens_to_mask( t:int["b"],length: int | None = None,)-> bool["b n"]:
     seq = jnp.arange(length, device = t.device)
     return seq[None, :] < t[:, None]
 
+@jax.jit
 def mask_from_start_end_indicies(start:int["b"], end:int["b"], max_seq_len:int):
     seq = jnp.arange(max_seq_len, device=start.device, dtype = jnp.int64)
     start_mask = seq[None,:] >= start[:, None]
     end_mask = seq[None, :] < end[:, None]
     return start_mask & end_mask
 
+@jax.jit
+def mask_from_frac_lengths(seq_len: int["b"], frac_lengths:float["b"], max_seq_len:int, seed = key):
+    lengths = jnp.int64(frac_lengths * seq_len)
+    max_start = seq_len - lengths
+    
+    key = jax.random.key/(seed)
+    rand = jax.random.normal(key, shape = (len(frac_lengths), ))
+    
+    start = jnp.clip(jnp.int64(max_start * rand), min = 0)
+    
+    end = start + lengths
+    
+    return mask_from_start_end_indicies(start, end, max_seq_len)
 
+# create Buffer Class so that untrained parameters are also recognized
+class Buffer(nnx.Variable):
+    pass
 
 
 class RotaryEmbedding(nnx.Module):
     def __init__(self, dim, use_xpos, scale_base, interpolation_factor, base, base_rescale_factor):
-        pass
-
+        
+        base *= base_rescale_factor ** (dim / (dim-2))
+        
+        inv_freq = 1.0 / (base ** (jnp.arange(0, dim, 2, dtype = jnp.float32) / dim))
+        self.buffer_inv_freq = Buffer(inv_freq)
+        
+        assert interpolation_factor >= 1.0
+        self.interpolation_factor = interpolation_factor
+        
+        if not use_xpos:
+            self.buffer_scale = Buffer(None)
+            return
+        
+        scale = (jnp.arange(0, dim, 2 + 0.4 * dim) / (1.4 * dim))
+        
+        self.scale_base = scale_base
+        self.buffer_scale = Buffer(scale)
+        
+    
+    def forward_from_seq_len(self, seq_len):
+        
+        t = jnp.arange(seq_len)
+        return t
+    
+    def __call__ (self, t:jnp.ndarray):
+        max_pos = t.max() + 1
+        
+        if t.ndim == 3:
+            t = rearrange(t, "n -> 1 n")
+            
+        freqs = jnp.einsum("bi,j->bij", t.astype(jnp.float32), self.buffer_inv_freq) / self.interpolation_factor
+        freqs = jnp.stack((freqs, freqs), axis = -1)
+        freqs = rearrange(freqs, "... d r -> ... (d r)")
+        
+        if not exists(self.buffer_scale):
+            return freqs, 1.0
+        
+        power = (t - (max_pos // 2)) / self.buffer_scale
+        scale = self.buffer_scale ** rearrange(power, "n -> n 1")
+        scale = jnp.stack((scale, scale), dim = -1)
+        scale = rearrange(scale, "... d r -> (d r)")
+        
+        return freqs, scale
 
 
 
@@ -470,15 +534,22 @@ class DiT(nnx.Module):
         output = self.proj_out(x)
         
         return output     
+
+# constants for duration predictor
         
-        
-        
+SAMPLE_RATE = 24_000
+HOP_LENGTH = 256
+SAMPLES_PER_SECOND = SAMPLE_RATE / HOP_LENGTH        
 
 def maybe_masked_mean():
     pass
 
-class Rearrange(nnx.Module):
-    pass
+class Rearrange(nnx.Module):                        # TODO: eher unötig oder nicht ?
+    def __init__(self, pattern:str):
+        self.pattern = pattern
+    def __call__(self, x: jnp.array) -> jnp.array:
+        return rearrange(x, self.pattern)
+    
 
 class DurationInputEmbedding(nnx.Module):
     pass
