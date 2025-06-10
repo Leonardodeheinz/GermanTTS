@@ -10,31 +10,37 @@ dt - dimension text
 c - channel dimensions
 """
 # neural network libaries
-from ast import Module
-from asyncio import constants
-from os import device_encoding
-from re import S
-from statistics import mean
-from tokenize import group
-from typing import Text
-from wsgiref import headers
+
+from multiprocessing import Value
+from typing import Callable, Literal
+import flax.serialization
+import flax.serialization
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-
+import flax
 from flax import nnx
+import optax
+import safetensors.flax
 
 # type hinting
 from jaxtyping import ArrayLike
 from jax import Array
+
+# standard libary or other useful helpers
+from pathlib import Path
+from huggingface_hub import snapshot_download
+from multiprocessing import Value
+from typing import Callable, Literal
+from functools import partial
 
 # tensor helpers 
 from einops import rearrange, reduce, repeat
 import einx
 
 # retransforming mel-spectogram with neural voice encoder
-from numpy.core.umath import ndarray
+from numpy.core.umath import ndarray, zeros
 from vocos import Vocos # is pretrained
 
 # logging if needed
@@ -42,6 +48,7 @@ from loguru import logging
 
 # for the Rottary Embdedding 
 from transformers import RoFormerModel
+from data.data_loader import MelSpec
 
 # seeds for random numbers
 
@@ -62,6 +69,27 @@ def divisible_by(num, den):
 
 def xnor(x,y):
     return not (x ^ y)
+
+# tokenizer helper
+
+import jax.numpy as jnp
+
+def list_str_to_vocab_tensor(
+    texts: list[list[str]], vocab: dict[str, int], padding_value: int = -1
+):
+    # Convert each string to vocab index, falling back to padding_value if not found
+    indexed = [
+        [vocab.get(token, padding_value) for token in seq]
+        for seq in texts
+    ]
+    # Find the max sequence length for padding
+    max_len = max(len(seq) for seq in indexed)
+    # Pad sequences to the same length
+    padded = [
+        seq + [padding_value] * (max_len - len(seq)) for seq in indexed
+    ]
+    # Convert to JAX array
+    return jnp.array(padded)
 
 # tensor helpers
 @jax.jit
@@ -84,14 +112,17 @@ def mask_from_frac_lengths(seq_len: int["b"], frac_lengths:float["b"], max_seq_l
     lengths = jnp.int64(frac_lengths * seq_len)
     max_start = seq_len - lengths
     
-    key = jax.random.key/(seed)
-    rand = jax.random.normal(key, shape = (len(frac_lengths), ))
+    key = jax.random.key(seed)
+    rand = jax.random.uniform(key, shape = (len(frac_lengths), ))
     
     start = jnp.clip(jnp.int64(max_start * rand), min = 0)
     
     end = start + lengths
     
     return mask_from_start_end_indicies(start, end, max_seq_len)
+
+
+
 
 # create Buffer Class so that untrained parameters are also recognized
 class Buffer(nnx.Variable):
@@ -139,20 +170,35 @@ class RotaryEmbedding(nnx.Module):
         
         power = (t - (max_pos // 2)) / self.buffer_scale
         scale = self.buffer_scale ** rearrange(power, "n -> n 1")
-        scale = jnp.stack((scale, scale), dim = -1)
+        scale = jnp.split((scale, scale), axis = -1)  # TODO: jnp.split is not the same as torch.unbind !!!
         scale = rearrange(scale, "... d r -> (d r)")
         
         return freqs, scale
 
 
+# rotation helper functions
 
+def rotate_half(x):
+    x = rearrange(x, "... (d r) -> ... d r", r = 2)
+    x1, x2 = x.unbind(axis=-1)
+    x = jnp.stack((-x2, x1),dim=-1)
+    x = rearrange(x, "... d r -> ... (d r)")
+    return x
 
-
-
-
-
-
-
+def apply_rotary_pos_emb(t, freqs, scale=1):
+    rot_dim, seq_len, orig_dtype = freqs.shape[-1], t.shape[-2], t.dtype
+    
+    freqs = freqs[:, -seq_len:, :]
+    scale = scale[:, -seq_len:, :] if isinstance(scale, jnp.ndarray) else scale
+    
+    if t.ndim == 4 and freqs.dim == 3:
+        freqs = rearrange(freqs, "b n d -> b 1 n d")
+    
+    t, t_unrotated = t[..., :rot_dim,], t[..., rot_dim:]
+    t = (t * jnp.cos(freqs) * scale) + (rotate_half(t) * jnp.sin(freqs) * scale)
+    out = jnp.concat((t, t_unrotated), dim=-1)
+    
+    return out.astype(orig_dtype)
 
 
 # GRN response normalization layer
@@ -541,8 +587,17 @@ SAMPLE_RATE = 24_000
 HOP_LENGTH = 256
 SAMPLES_PER_SECOND = SAMPLE_RATE / HOP_LENGTH        
 
-def maybe_masked_mean():
-    pass
+def maybe_masked_mean(t: float["b n d"], mask: bool["b n"] = None) -> float["b d"]:  # noqa: F722
+    if not exists(mask):
+        return  jnp.mean(t, axis = 1)
+    
+    t = einx.where("b n, b n d -> b n d", mask , t , 0.0)
+    num = reduce(t, "b n d -> b d", "sum")
+    den = reduce(mask.astype(jnp.float32), "b n -> b", "sum")
+    
+    return einx.divide("b d, b -> b d", num, jnp.clip(den, min = 1.0))  # TODO: check the if (clip funciton) == torch.clamp()
+    
+    
 
 class Rearrange(nnx.Module):                        # TODO: eher unötig oder nicht ?
     def __init__(self, pattern:str):
@@ -552,26 +607,545 @@ class Rearrange(nnx.Module):                        # TODO: eher unötig oder ni
     
 
 class DurationInputEmbedding(nnx.Module):
-    pass
-
+    def __init__ (self, mel_dim, text_dim, out_dim):
+        self.proj = nnx.Linear(mel_dim + text_dim, out_dim)
+        self.conv_pos_embed = ConvPositionalEmbedding(dim=out_dim)
+    
+    def __call__ (self, x:float["b n d"], text_embed: float["b nd "]):
+        x = self.proj(jnp.concat((x, text_embed), dim = -1))
+        x = self.conv_pos_embed(x) + x
+        return x
+        
+        
 class DurationBlock(nnx.Module):
-    pass
-
+    def __init__ (self, dim, heads, dim_head, ff_mult = 4, dropout = 0.1):
+        self.attn_normal = nnx.LayerNorm(dim, use_bias= False, use_scale = False, epsilon = 1e-6)
+        self.attn = Attention(
+            dim = dim,
+            heads = heads,
+            dim_head = dim_head,
+            dropout = dropout,   
+        )
+        self.ff_norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False, eps = 1e-6)
+        self.ff =FeedForward(dim = dim, mult = ff_mult, dropout=dropout, approximate = "tanh")
+        
+    def __call__(self, x, mask = None, rope = None):
+        norm = self.attn_norm(x)
+        attn_output = self.attn(x=norm, mask=mask, rope=rope)
+        x = x + attn_output
+        norm = self.ff_norm(x)
+        ff_output = self.ff(norm)
+        x = x + ff_output
+        return x 
+        
 class DurationTransformer(nnx.Module):
-    pass
+    def __init__(self, * , dim:int, depth:int = 8,
+                 heads:int = 8, dim_head:int = 64, droput:float = 0.1,
+                 ff_mult:int = 4, mel_dim:int = 100, text_num_embeds:int = 256,
+                 text_dim = None, conv_layers = 0,
+                 ):
+        if text_dim is None:
+            text_dim = mel_dim
+            
+        self.text_embed = TextEmbedding(text_num_embeds = text_num_embeds, text_dim = text_dim, conv_layers = conv_layers)
+        self.input_embed = DurationInputEmbedding(mel_dim, text_dim, dim)
+        self.rotary_embed = RotaryEmbedding(dim_head)
+        
+        self.dim = dim
+        self.depth = depth
+
+        self.transformer_blocks = [DurationBlock(
+            dim = dim, 
+            heads = heads,
+            dim_head = dim_head, 
+            ff_mult = ff_mult, 
+            dropout = droput,
+        ) for _ in range(depth)
+                                   ]    
+    
+        self.norm_out = nnx.RMSNorm(dim)
+    
+    def __call__ (self, x:float ["b n d"], text:int ["b nt"], mask:bool["b n"] | None = None):
+        seq_len = x.shape[1]
+        
+        text_embed = self.text_embed(text, seq_len)
+        x = self.input_embed(x, text_embed)
+         
+        rope = self.rotary_embed.forward_from_seq_len(seq_len)
+        
+        for block in self.transformer_blocks:
+            x = block(x, mask = mask, rope = rope)
+        
+        x = self.norm_out(x)
+        
+        return x
+        
+# l1 loss function 
+@jax.jit
+def l1_loss(pred, target, reduction = None):
+    return jnp.abs(pred, target)    
 
 class DurationPredictor(nnx.Module):
-    pass
+    def __init__ (self, transformer:nnx.Module, mel_spec_kwargs: dict = dict(), tokenizer: einx.Callable[[str], list[str]] | None = None,):
+        if not exists(mel_spec_kwargs):
+            self.mel_spec = MelSpec(**mel_spec_kwargs)
+            
+        self.num_channels = self.mel_spec.n_mel_channels
+        self.transformer = transformer
+        self.tokenizer = tokenizer
+        self.to_pred = nnx.Sequential(nnx.Linear(transformer.dim, 1, use_bias= False), nnx.softplus(), Rearrange("... 1 -> ..."))
+    
+    
+    
+    def __call__ (self, inp: float["b n d"] | float["b nw"], text: int["b nt"] | list[str], *, lens:int["b"] | None = None, return_loss = False, key:int = 42):
+        
+        # check if inp is not mel-spectogram (maybe because of an bug)
+        
+        if inp.ndim == 2:           # TODO: pretty sure to cast the data from torch to flax if it was not preprocessed
+            
+            inp = self.mel_spec(inp)
+            inp = rearrange(inp, "b d n -> b n d")
+            assert inp.shape[-1] == self.num_channels
+        
+        batch, seq_len, device = inp.shape[0], inp.shape[1], inp.device
+        
+        if isinstance(text, list):
+            if exists(self.tokenizer):
+                text = self.tokenizer(text)
+            else:
+                assert False, "if text is provided than tokenizer must be a list"
+            assert text.shape[0] == batch
+        
+        # lens and mask
+        
+        if not exists(lens):
+            lens = jnp.full((batch,), seq_len, device=device)            
+        
+        mask = lens_to_mask(lens, length = seq_len)
+        
+        if return_loss:
+            rand_franc_index = jax.random.uniform(key, shape = (batch,), dtype = inp.dtype, minval=0, maxval=1, device = device)
+            rand_index = jnp.int64(rand_franc_index * lens)
+            
+            seq = jnp.arange(seq_len, device=device)
+            mask &= einx.less("n, b -> b n ", seq, rand_index)
+            
+        inp = jnp.where(
+            repeat(mask,"b n  -> b n d", d = self.num_channels),
+            inp, 
+            jnp.zeros_like(inp),
+            )
+        
+        x = self.transformers(inp, text = text)
+        
+        x = maybe_masked_mean(x, mask)
+        
+        pred = self.to_pred(x)
+        
+        if not return_loss:
+            return pred
 
-def odeint_euler():
-    pass
+        duration = jnp.float32(lens) / SAMPLES_PER_SECOND
+        return l1_loss(pred, duration)
+            
 
-def odeint_midpoint():
-    pass
+            
+            
+#@jax.jit this needs to be rewrite but i 
 
-def odeint_rk4():
-    pass
+def odeint_euler(func, y0, t, **kwargs):
+    """
+    Solves ODE using the Euler method.
+
+    Parameters:
+    - func: Function representing the ODE, with signature func(t, y)
+    - y0: Initial state, a PyTorch tensor of any shape
+    - t: Array of time steps, a PyTorch tensor
+    """
+    ys = [y0]
+    y_current = y0
+
+    for i in range(len(t) - 1):
+        t_current = t[i]
+        dt = t[i + 1] - t_current
+
+        # compute the next value
+        k = func(t_current, y_current)
+        y_next = y_current + dt * k
+        ys.append(y_next)
+        y_current = y_next
+
+    return jnp.stack(ys)
+
+def odeint_midpoint(func, y0, t, **kwargs):
+    """
+    Solves ODE using the midpoint method.
+
+    Parameters:
+    - func: Function representing the ODE, with signature func(t, y)
+    - y0: Initial state, a PyTorch tensor of any shape
+    - t: Array of time steps, a PyTorch tensor
+    """
+    ys = [y0]
+    y_current = y0
+
+    for i in range(len(t) - 1):
+        t_current = t[i]
+        dt = t[i + 1] - t_current
+
+        # midpoint approximation
+        k1 = func(t_current, y_current)
+        mid = y_current + 0.5 * dt * k1
+
+        # compute the next value
+        k2 = func(t_current + 0.5 * dt, mid)
+        y_next = y_current + dt * k2
+        ys.append(y_next)
+        y_current = y_next
+
+    return jnp.stack(ys)
+
+@jax.vmap
+def odeint_rk4(func, y0, t, **kwargs):
+    """
+    Solves ODE using the Runge-Kutta 4th-order (RK4) method.
+
+    Parameters:
+    - func: Function representing the ODE, with signature func(t, y)
+    - y0: Initial state, a PyTorch tensor of any shape
+    - t: Array of time steps, a PyTorch tensor
+    """
+    ys = [y0]
+    y_current = y0
+
+    for i in range(len(t) - 1):
+        t_current = t[i]
+        dt = t[i + 1] - t_current
+
+        # rk4 steps
+        k1 = func(t_current, y_current)
+        k2 = func(t_current + 0.5 * dt, y_current + 0.5 * dt * k1)
+        k3 = func(t_current + 0.5 * dt, y_current + 0.5 * dt * k2)
+        k4 = func(t_current + dt, y_current + dt * k3)
+
+        # compute the next value
+        y_next = y_current + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+        ys.append(y_next)
+        y_current = y_next
+
+    return jnp.stack(ys)
 
 
 class GermanTTS(nnx.Module):
-    pass
+        def __init__(
+        self,
+        transformer: nnx.Module,
+        audio_drop_prob=0.3,
+        cond_drop_prob=0.2,
+        mel_spec_kwargs: dict = dict(),
+        frac_lengths_mask: tuple[float, float] = (0.7, 1.0),
+        duration_predictor: nnx.Module | None = None,
+        tokenizer: Callable[[str], list[str]] | None = None,
+        vocoder: Callable[[float["b d n"]]] | None = None,  # noqa: F722
+        seed:int = 42,
+    ):
+            self.frac_lengths_mask = frac_lengths_mask
+            
+            self.mel_spec = MelSpec(**mel_spec_kwargs)
+            self.num_channels = self.mel_spec.n_mel_channels
+            
+            self.audio_drop_prob = audio_drop_prob
+            self.audio_cond_prob = cond_drop_prob
+            
+            self.transformers = transformer
+            dim = transformer.dim
+            self.dim = dim
+            
+            self.tokenizer = tokenizer 
+            
+            self.vocoder = vocoder 
+            
+            self._duration_predictor = duration_predictor
+            
+            self.rng_key = jax.random.key(seed)
+            
+            self.EMA_model = optax.ema()
+            
+        def device(self):
+            return next((self.parameters())).device
+        
+        def __call__(self,
+                     inp:float["b n d"] | float["b nw"],
+                     text:int["b nt"] | list[str],
+                     *,
+                     lens:int["b"] | None = None,
+                     ema_model:"GermanTTS" | None = None,
+                     key:int = 42
+                     ):
+            
+            batch, seq_len, device = inp.shape[0], inp.shape[1], inp.device
+            
+            if isinstance(text, list):
+                if exists(self.tokenizer):
+                    text = self.tokenizer(text) # to device ?
+                else:
+                    assert False, "if text is a list, a tokenizer must be provided"
+                assert(text.shape[0]) == batch
+            
+            if not exists(lens):
+                lens = jnp.full((batch,), seq_len, device = device)
+            
+            mask = lens_to_mask(lens , length = seq_len)
+            
+            frac_lengths = jax.random.uniform(self.rng_key, shape=(batch,), dtype=jnp.float32)
+            rand_span_mask = mask_from_frac_lengths(lens, frac_lengths, seq_len)
+            
+            if exists(mask):
+                rand_span_mask &= mask
+                
+            x1 = inp
+            
+            x0 = jax.random.normal(key = self.rng_key, shape=(batch, seq_len), dtype = jnp.float32)
+            
+            time = jax.random.uniform(key = self.rng_key, shape = (batch,), device = self.device)
+            
+            t = rearrange(time, "b -> b 1 1")
+            w = (1 - t) * x0 + t * x1
+            flow = x1 - x0
+            
+            cond = jnp.where(rand_span_mask[..., None], jnp.zeros_like(x1), x1)
+            
+            use_mg_loss = exists(ema_model)
+            
+            if not use_mg_loss:
+                rand_audio_drop = jax.random.uniform(key = self.rng_key, shape = 1)
+                rand_cond_drop = jax.random.uniform(key = self.rng_key, shape = 1)
+                drop_audio_cond = rand_audio_drop < self.audio_drop_prob
+                drop_text = rand_cond_drop < self.audio_cond_prob
+                drop_audio_cond = drop_audio_cond | drop_text
+            else:
+                drop_text = False
+                drop_audio_cond = False
+            
+            pred = self.transformers(x = w,
+                                     cond = cond, 
+                                     text = text, 
+                                     time = time,
+                                     drop_audio_cond = drop_audio_cond, 
+                                     drop_text = drop_text,
+                                     mask = mask,
+                                     )
+            EMA = optax.ema()
+            
+            if use_mg_loss:   # TODO: need to check how ema works.
+                # with torch.no_grad()
+                    guidance_cond = optax.ema()
+                    
+                    
+                    
+                    
+                    
+                    
+            loss = optax.losses.squared_error(pred, flow).mean()
+            loss = loss[rand_span_mask].mean()
+            
+            return loss
+        
+        def predict_curation(self,
+                             cond:float["b nd "],
+                             text:int["b nt"],
+                             speed:float =1.0, 
+                             )-> int:
+            duration_in_sec = self._duration_predictor(cond, text)
+            frame_rate = self.mel_spec.sampling_rate // HOP_LENGTH
+            duration = jnp.float32(duration * frame_rate / speed)
+            return duration
+        
+        def sample(
+            self,
+            cond: float["b n d"] | float["b nw"],  # noqa: F722
+            text: int["b nt"] | list[str],  # noqa: F722
+            duration: int | int["b"] | None = None,  # noqa: F821
+            *,
+            lens: int["b"] | None = None,  # noqa: F821
+            ode_method: Literal["euler", "midpoint", "rk4"] = "rk4",
+            steps=32,
+            cfg_strength=1.0,
+            speed=1.0,
+            sway_sampling_coef=None,
+            max_duration=4096,
+    ):
+            self.eval()
+            
+            cond = jnp.float32(cond)
+            
+            if next(self.parameters()).dtype == jnp.float16:
+                cond = jnp.astype(x, dtype = jnp.float16)
+            
+            batch, cond_seq_len, device = cond.shape[0], cond.shape[1], cond.device
+            
+            if isinstance(text, list):
+                if exists(self.tokenizer):
+                    text = self.tokenizer(text)
+                else:
+                    assert False, "if text is a list, a tokenizer must be provided"
+                assert text.shape[0] == batch
+            
+            if not exists(lens):
+                lens = jnp.full((batch,), cond_seq_len, dtype = jnp.float32)
+                
+            if exists(text):
+                text_lens = jnp.sum(text != -1, axis = -1)
+                lens = jnp.maximum(text_lens, lens)
+            
+            if cond_seq_len < text.shape[1]:
+                cond_seq_len = text.shape[1]
+                cond = jnp.pad(cond, (0, 0 , 0, cond_seq_len - cond.shape[1]), mode = "zeros")
+                
+            if duration is None and  self._duration_predictor is not None:
+                duration = self.duration_predictor(cond, text, speed)
+            elif duration is None:
+                raise ValueError("Duration must be provided or a duration predictor must be set") 
+            
+            cond_mask = lens_to_mask(lens)
+            
+            if isinstance(duration, int):
+                duration = jnp.full((batch,), duration , dtype = jnp.float32)
+            
+            assert lens < duration, "duration must be at least as long as the input"
+            
+            duration = jnp.clip(duration, max = max_duration)
+            max_duration = jnp.amax(duration)
+            
+            cond = jnp.pad(cond, (0,0,0, max_duration - cond_seq_len), value = 0.0)
+            cond_mask = jnp.pad(cond_mask, (0, 0, 0 , max_duration - cond_mask.shape[-1]), value = False)
+            cond_mask = rearrange(cond_mask, "... -> ... 1")
+            
+            # at each step conditioning is fixed
+            
+            step_cond = jnp.where(cond_mask, cond, jnp.zeros_like(cond))
+            
+            if batch > 1:
+                mask = lens_to_mask(cond)
+            else:
+                mask = None
+            
+            def fn(t, x):
+                pred = self.transformers(
+                    x = x, 
+                    cond = step_cond, 
+                    text = text,
+                    time = t,
+                    mask = mask,
+                    drop_audio_cond = False,
+                    drop_text = False,
+                    )
+                
+                if cfg_strength < 1e-5:
+                    return pred
+                
+                null_pred = self.transformers(x = x,
+                    cond = step_cond, 
+                    text = text,
+                    time = t, 
+                    mask = mask, 
+                    drop_audio_cond = True,
+                    dropt_text = True,
+                )
+                
+                output = pred + (pred - null_pred) * cfg_strength
+                return output
+            
+            if ode_method == "euler":
+                odeint_fn = odeint_euler
+            elif ode_method == "rk4":
+                odeint_fn = odeint_rk4
+            elif odeint_fn == "midpoint":
+                odeint_fn = odeint_midpoint
+            else:
+                raise ValueError(f"Unknown method: {ode_method}")
+            
+            y0 = []
+            for dur in duration:
+                if exists(self.rng_key):
+                    y0.append(jax.random.normal(self.rng_key, (dur, self.num_channels), dtype = step_cond.dtype))
+            #y0 = pad_seq  #TODO: look for better option to do this
+            
+            t = jnp.linspace(0, 1, dtype = step_cond.dtype)
+            if exists(sway_sampling_coef):
+                t = t + sway_sampling_coef * (jnp.cos(jnp.pi / 2 * t) - 1 + t)
+                
+                
+            trajectory = odeint_fn(fn, y0, t)
+            
+            sampled = trajectory[-1]
+            
+            # trim the reference audio
+            
+            out = sampled[:, cond_seq_len]
+            
+            if exists(self.vocoder):        # TODO: convert jax -> numpy -> torch for vocoder
+                out = np.asarray
+                
+                # out = out.permute(0,2,1)
+                # out = self.vocoder(out.cpu():
+            
+        
+        @classmethod
+        def from_pretrained(cls, hf_model_name_or_path:str) -> "GermanTTS":
+            if exists(hf_model_name_or_path):
+                path = Path(snapshot_download(repo_id = hf_model_name_or_path, allow_patterns = ["*.safetensors", "*.txt"]))
+            else:
+                raise ValueError(f"please provide an vailid path for the model path: {hf_model_name_or_path}")
+            
+            vocab_path = path / "vocab.txt"
+            vocab = {v: i for i, v in enumerate(Path(vocab_path).read_text().split("\n"))}
+            
+            tokenizer = partial(list_str_to_vocab_tensor, vocab=vocab)
+            
+            vocos = Vocos.from_pretrained("charachtr/vocos-mel-24khz")
+            
+            duration_model_filename = "duration.safetensors"
+            duration_model_path = path / duration_model_filename
+            duration_predictor = None
+            
+            if duration_model_filename.exists():
+                duration_predictor = DurationPredictor(
+                    transformer = DurationTransformer(
+                        dim = 512,
+                        depth = 12,
+                        heads = 8,
+                        text_dim = 12,
+                        ff_mult = 2,
+                        conv_layers=0,
+                        text_num_embeds=len(vocab),
+                    ), tokenizer = tokenizer
+                )
+                
+            state_dict = safetensors.flax.load_file(duration_model_path.as_posix())
+            duration_predictor = flax.serialization.from_state_dict(duration_predictor, state_dict, "duration_predictor")
+            
+            
+            model_filename = "model.safetensors"
+            model_path = path / model_filename
+            
+            model = GermanTTS(
+                transformer=DiT(
+                    dim = 512,
+                    depth = 18,
+                    heads = 12,
+                    text_dim = 512,
+                    ff_mult = 2,
+                    conv_layers= 4,
+                    text_num_embeds=len(vocab)
+                    ),
+                tokenizer=tokenizer,
+                vocoder=vocos.decode,
+            )
+            
+            state_dict = safetensors.flax.load_file(model_path.as_posix())
+            model = flax.serialization.from_state_dict(model, state_dict, "model")
+            
+            model._duration_predictor = duration_predictor
+            
+            return model 
