@@ -21,7 +21,7 @@ import os
 
 from PreProcesesAudio import (
     MelSpec,
-    Resampler 
+    Resampler
 )
 
 # helpful array handling libaries
@@ -42,7 +42,7 @@ from einops import rearrange, reduce, repeat
 # check if directory exits
 import os 
 
-class Huggingface_Dataset:
+class Huggingface_Datasetloader:
     """
     This class provides an easy way to load an huggingface audio dataset and convert it quickly for TTS training
     args:
@@ -233,7 +233,7 @@ def preprocess_commonvoice(batch, orig_freq=None, audio_threshold_max=20, audio_
 #                                       cache_dir = "/home/dheinz/Documents/GermanTTS/res/example/1_hours",
 #                                       )
                                        
-common_voice = Huggingface_Dataset(name_of_dataset = "mozilla-foundation/common_voice_17_0",
+common_voice = Huggingface_Datasetloader(name_of_dataset = "mozilla-foundation/common_voice_17_0",
                                     if_stream = False, 
                                     language = "de",
                                      split = "train",

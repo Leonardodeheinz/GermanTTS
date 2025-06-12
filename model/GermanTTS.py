@@ -14,7 +14,6 @@ c - channel dimensions
 from multiprocessing import Value
 from typing import Callable, Literal
 import flax.serialization
-import flax.serialization
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -22,6 +21,7 @@ import numpy as np
 import flax
 from flax import nnx
 import optax
+import torch
 import safetensors.flax
 
 # type hinting
@@ -44,11 +44,12 @@ from numpy.core.umath import ndarray, zeros
 from vocos import Vocos # is pretrained
 
 # logging if needed
-from loguru import logging
+from loguru import logger
 
 # for the Rottary Embdedding 
 from transformers import RoFormerModel
-from data.data_loader import MelSpec
+from data.DataLoader import MelSpec
+
 
 # seeds for random numbers
 
@@ -1084,11 +1085,13 @@ class GermanTTS(nnx.Module):
             
             out = sampled[:, cond_seq_len]
             
-            if exists(self.vocoder):        # TODO: convert jax -> numpy -> torch for vocoder
-                out = np.asarray
-                
-                # out = out.permute(0,2,1)
-                # out = self.vocoder(out.cpu():
+            if exists(self.vocoder):        
+                out = np.asarray(out, dtype= out.dtype)
+                out = torch.from_numpy(out)
+                out = torch.permute(input = out, dims = (0,2,1))
+                out = self.vocoder(out.cpu())
+            
+            return out 
             
         
         @classmethod
@@ -1148,4 +1151,4 @@ class GermanTTS(nnx.Module):
             
             model._duration_predictor = duration_predictor
             
-            return model 
+            return model
