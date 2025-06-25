@@ -13,10 +13,8 @@ dt - dimension text
 from random import sample
 from datasets import load_dataset
 from datasets import load_from_disk
-from datasets import get_dataset_split_names
-from datasets import get_dataset_config_names
-from datasets import Dataset, Features, Array2D
-from functools import cache, partial
+
+from functools import partial
 import os
 
 from PreProcesesAudio import (
@@ -26,8 +24,7 @@ from PreProcesesAudio import (
 
 # helpful array handling libaries
 import datasets
-import numpy as np
-import jax.numpy as jnp
+
 
 # for plotting mel spectogram
 import matplotlib.pyplot as plt
@@ -37,7 +34,7 @@ import matplotlib.pyplot as plt
 from loguru import logger
 
 # for better readibility in handling data
-from einops import rearrange, reduce, repeat
+from einops import rearrange
 
 # check if directory exits
 import os 
@@ -86,7 +83,7 @@ class Huggingface_Datasetloader:
         # basic information for the preprocessing
         self.sampling_rate = self.data[0]["audio"]["sampling_rate"]
         self.dtype_to_resample_to = self.data[0]["audio"]["array"].dtype
-        breakpoint()
+        
         
         
     def get_data(self):
@@ -133,21 +130,21 @@ class Huggingface_Datasetloader:
         
         preprocessor = partial(make_preprocessor, orig_freq = 16_000, audio_threshold_max = 20, audio_threshold_min = 3)
         logger.info(f"num_proc: {num_proc}, batch_size: {batch_size}, Preprocessing starts, data_size: {self.data.shape}")
-        breakpoint()
+        
         self.data = self.data.map(preprocessor,
                                   batched = True,
                                   batch_size = batch_size, 
                                   num_proc= num_proc,
                                   remove_columns=self.data.column_names,
-                                  load_from_cache_file=False, 
+                                  load_from_cache_file=True, 
                                   keep_in_memory= True
                                   )
-        breakpoint()
+        
         # safe data if data path is provided
         if os.path.exists(safe_data_path):
             self.__safe_data__(safe_data_path)
         
-        breakpoint()
+        logger.info(f"Preprocessing finished, data_size: {self.data.shape}, saved to {safe_data_path}")
         
         
     def get_dataset(self) -> datasets.dataset_dict:
@@ -186,45 +183,7 @@ class Huggingface_Datasetloader:
 
   
     
-# define preprocess functions
-
-def preprocess_facebook_librispeech(batch, orig_freq=None, audio_threshold_max=20, audio_threshold_min=3):
-    resampler = Resampler(orig_freq=orig_freq, new_freq=24_000)
-    melspec = MelSpec(sampling_rate=orig_freq)
-
-    audio_arrays = batch["audio"]
-    audio_duration = batch["audio_duration"]
-
-    mels = []
-
-    logger.info("PreProcessing starts")
-    for index in range(len(audio_arrays)):
-        if audio_threshold_min < audio_duration[index] <= audio_threshold_max:
-            audio_array = audio_arrays[index]["array"]
-
-            audio_array = resampler.forward(audio_array)
-            audio_array = rearrange(audio_array, "t -> 1 t")
-            audio_array = melspec.forward(audio_array)
-            mel_spec_array = rearrange(audio_array, "1 d t -> d t")
-            logger.info(f"mel_spec_array shape: {mel_spec_array.shape}")
-
-            mels.append(mel_spec_array)
-        else:
-            logger.info(f"File skipped (duration: {audio_duration[index]})")
-            mels.append(None)  # Maintain alignment
-
-    return {
-        "mel": mels,
-        "transcript": batch["transcript"],
-        "speaker_id": batch["speaker_id"]
-    }
-    
-    
-def preprocess_commonvoice(batch, orig_freq=None, audio_threshold_max=20, audio_threshold_min=3):
-    resampler = Resampler(orig_freq=orig_freq, new_freq=24_000)
-    melspec = MelSpec(sampling_rate=orig_freq)
-    pass
-#columns_to_remove = ["original_path", "file", "id","chapter_id"]
+# example
 
 # facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
 #                                       if_stream = False,
@@ -244,6 +203,6 @@ common_voice = Huggingface_Datasetloader(name_of_dataset = "mozilla-foundation/c
 
 
 filterd_dataset = load_from_disk("/home/dheinz/Documents/GermanTTS/res/example/1_hours")
-breakpoint()
+
 print("successful run")
 

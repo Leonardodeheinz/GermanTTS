@@ -25,8 +25,8 @@ import torch
 import safetensors.flax
 
 # type hinting
-from jaxtyping import ArrayLike
-from jax import Array
+from jaxtyping import Float, Array, PyTree, Bool, Int
+from typing import Callable, Literal
 
 # standard libary or other useful helpers
 from pathlib import Path
@@ -47,8 +47,8 @@ from vocos import Vocos # is pretrained
 from loguru import logger
 
 # for the Rottary Embdedding 
-from transformers import RoFormerModel
-from data.DataLoader import MelSpec
+#from transformers import RoFormerModel
+#from data.DataLoader import MelSpec
 
 
 # seeds for random numbers
@@ -73,7 +73,6 @@ def xnor(x,y):
 
 # tokenizer helper
 
-import jax.numpy as jnp
 
 def list_str_to_vocab_tensor(
     texts: list[list[str]], vocab: dict[str, int], padding_value: int = -1
@@ -94,22 +93,24 @@ def list_str_to_vocab_tensor(
 
 # tensor helpers
 @jax.jit
-def lens_to_mask( t:int["b"],length: int | None = None,)-> bool["b n"]:
-    if not exists(length):
-        length = jnp.amax(t)
-    
-    seq = jnp.arange(length, device = t.device)
-    return seq[None, :] < t[:, None]
+def lens_to_mask(lengths, max_len=None):
+    if max_len is None:
+        max_len = jnp.amax(lengths)
+    seq = jnp.arange(max_len)
+    return seq[None, :] < lengths[:, None]
 
 @jax.jit
-def mask_from_start_end_indicies(start:int["b"], end:int["b"], max_seq_len:int):
+def mask_from_start_end_indicies(start: int,  # noqa: F722 F821
+    end: int,  # noqa: F722 F821
+    max_seq_len: int,
+):
     seq = jnp.arange(max_seq_len, device=start.device, dtype = jnp.int64)
     start_mask = seq[None,:] >= start[:, None]
     end_mask = seq[None, :] < end[:, None]
     return start_mask & end_mask
 
 @jax.jit
-def mask_from_frac_lengths(seq_len: int["b"], frac_lengths:float["b"], max_seq_len:int, seed = key):
+def mask_from_frac_lengths(seq_len: int, frac_lengths:float, max_seq_len:int, seed = key):
     lengths = jnp.int64(frac_lengths * seq_len)
     max_start = seq_len - lengths
     
@@ -239,7 +240,7 @@ class ConvNeXtV2Block(nnx.Module):
     def __call__(self, x:jnp.ndarray) -> jnp.ndarray:
         residual = x
         x = rearrange(x, "b n d -> b d n")
-        x = self.dwconv(x)                      #TODO: Check the dimensions of the input and output
+        x = self.dwconv(x)                     
         x = rearrange(x, "b d n -> b n d")
         x = self.norm(x)
         x = self.pwconv1(x)
@@ -277,7 +278,8 @@ class ConvPositionalEmbedding(nnx.Module):
             nnx.Conv(dim, dim, kernel_size = kernel_size, groups = groups, padding = padding_size),
             jax.nn.mish()
         )
-    def __call__(self, x:float["b n d"], mask:bool["b n"] | None = None):
+
+    def __call__(self, x:Float[Array, "b n d"], mask:Bool[Array,"b n"] | None = None):
         if exists(mask):
             mask = mask[..., None]
             jnp.where(mask, x,0.0)
@@ -298,7 +300,7 @@ class TimestepEmbedding(nnx.Module):
         self.time_embed = SinusPositonalEmbedding(freq_ebmed_dim)
         self.time_mlp = nnx.Sequential(nnx.Linear(freq_ebmed_dim, dim), nnx.silu(), nnx.Linear(dim, dim))
         
-    def __call__(self, timestep:float["b"]): 
+    def __call__(self, timestep:Float[Array, "b"]): 
         time_hidden = self.time_embed(timestep)
         time_hidden = time_hidden.to(timestep.dtype)
         time = self.time_mlp(time_hidden)
@@ -352,8 +354,8 @@ class Attention(nnx.Module):
     
     
     def __call__(self, 
-                x:float["b n d"],
-                mask: bool["b n"] | None = None,
+                x:Float[Array, "b n d"],
+                mask: Bool[Array, "b n"] | None = None,
                 rope = None,
                 ) -> jnp.array:
         batch_size = x.shape[0]
@@ -484,9 +486,9 @@ class InputEmbedding(nnx.Module):
         self.conv_pos_embed = ConvPositionalEmbedding(dim = out_dim)
 
     def __call__(self, 
-                 x: float["b n d"],
-                 cond:float["b n d"],
-                 text_embed:float["b n d"],
+                 x: Float[Array,"b n d"],
+                 cond:Float[Array,"b n d"],
+                 text_embed:Float[Array,"b n d"],
                  drop_audio_cond = False,
                  ):
         if drop_audio_cond:
@@ -561,7 +563,7 @@ class DiT(nnx.Module):
         self.norm_out = AdaLayernNormZero(dim)
         self.proj_out = nnx.Linear(dim, mel_dim, use_bias=False,kernel_init = nnx.initializers.lecun_normal)
         
-    def __call__ (self, x:float["b n d"], cond:float["b n d"], text:int["b nt"], time:float["b"], drop_audio_cond, drop_text, mask:bool["b n"] | None = None):
+    def __call__ (self, x:Float[Array,"b n d"], cond:Float[Array,"b n d"], text:Int[Array, "b nt"], time:Float[Array,"b"], drop_audio_cond, drop_text, mask:Bool[Array,"b n"] | None = None):
         
         batch, seq_len = x.shape[0], x.shape[1]
         
@@ -588,7 +590,7 @@ SAMPLE_RATE = 24_000
 HOP_LENGTH = 256
 SAMPLES_PER_SECOND = SAMPLE_RATE / HOP_LENGTH        
 
-def maybe_masked_mean(t: float["b n d"], mask: bool["b n"] = None) -> float["b d"]:  # noqa: F722
+def maybe_masked_mean(t: Float[Array, "b n d"], mask: Bool[Array,"b n"] = None) -> Float[Array,"b d"]:  # noqa: F722
     if not exists(mask):
         return  jnp.mean(t, axis = 1)
     
@@ -612,7 +614,7 @@ class DurationInputEmbedding(nnx.Module):
         self.proj = nnx.Linear(mel_dim + text_dim, out_dim)
         self.conv_pos_embed = ConvPositionalEmbedding(dim=out_dim)
     
-    def __call__ (self, x:float["b n d"], text_embed: float["b nd "]):
+    def __call__ (self, x:Float[Array, "b n d"], text_embed: Float[Array,"b nd "]):
         x = self.proj(jnp.concat((x, text_embed), dim = -1))
         x = self.conv_pos_embed(x) + x
         return x
@@ -666,7 +668,7 @@ class DurationTransformer(nnx.Module):
     
         self.norm_out = nnx.RMSNorm(dim)
     
-    def __call__ (self, x:float ["b n d"], text:int ["b nt"], mask:bool["b n"] | None = None):
+    def __call__ (self, x:Float [Array, "b n d"], text:Int [Array,"b nt"], mask:Bool[Array,"b n"] | None = None):
         seq_len = x.shape[1]
         
         text_embed = self.text_embed(text, seq_len)
@@ -698,7 +700,7 @@ class DurationPredictor(nnx.Module):
     
     
     
-    def __call__ (self, inp: float["b n d"] | float["b nw"], text: int["b nt"] | list[str], *, lens:int["b"] | None = None, return_loss = False, key:int = 42):
+    def __call__ (self, inp: Float[Array, "b n d"] | Float[Array, "b nw"], text: Int[Array,"b nt"] | list[str], *, lens:Int[Array,"b"] | None = None, return_loss = False, key:int = 42):
         
         # check if inp is not mel-spectogram (maybe because of an bug)
         
@@ -847,7 +849,7 @@ class GermanTTS(nnx.Module):
         frac_lengths_mask: tuple[float, float] = (0.7, 1.0),
         duration_predictor: nnx.Module | None = None,
         tokenizer: Callable[[str], list[str]] | None = None,
-        vocoder: Callable[[float["b d n"]]] | None = None,  # noqa: F722
+        vocoder: Callable[[],Float[Array, "b d n"]] | None = None,  # noqa: F722
         seed:int = 42,
     ):
             self.frac_lengths_mask = frac_lengths_mask
@@ -876,59 +878,18 @@ class GermanTTS(nnx.Module):
             return next((self.parameters())).device
         
         def __call__(self,
-                     inp:float["b n d"] | float["b nw"],
-                     text:int["b nt"] | list[str],
+                     inp:Float[Array,"b n d"] | Float[Array,"b nw"],
+                     text:Int[Array,"b nt"] | list[str],
                      *,
-                     lens:int["b"] | None = None,
-                     ema_model:"GermanTTS" | None = None,
-                     key:int = 42
-                     ):
+                     time: jnp.ndarray, # (b,) timestep
+                     cond: jnp.ndarray, # (b, n, d) or (b, n) conditional input
+                     mask: jnp.ndarray, # (b, n) mask for transformer attention
+                     drop_audio_cond: bool = False,
+                     drop_text: bool = False,
+                    ):
+           
             
-            batch, seq_len, device = inp.shape[0], inp.shape[1], inp.device
-            
-            if isinstance(text, list):
-                if exists(self.tokenizer):
-                    text = self.tokenizer(text) # to device ?
-                else:
-                    assert False, "if text is a list, a tokenizer must be provided"
-                assert(text.shape[0]) == batch
-            
-            if not exists(lens):
-                lens = jnp.full((batch,), seq_len, device = device)
-            
-            mask = lens_to_mask(lens , length = seq_len)
-            
-            frac_lengths = jax.random.uniform(self.rng_key, shape=(batch,), dtype=jnp.float32)
-            rand_span_mask = mask_from_frac_lengths(lens, frac_lengths, seq_len)
-            
-            if exists(mask):
-                rand_span_mask &= mask
-                
-            x1 = inp
-            
-            x0 = jax.random.normal(key = self.rng_key, shape=(batch, seq_len), dtype = jnp.float32)
-            
-            time = jax.random.uniform(key = self.rng_key, shape = (batch,), device = self.device)
-            
-            t = rearrange(time, "b -> b 1 1")
-            w = (1 - t) * x0 + t * x1
-            flow = x1 - x0
-            
-            cond = jnp.where(rand_span_mask[..., None], jnp.zeros_like(x1), x1)
-            
-            use_mg_loss = exists(ema_model)
-            
-            if not use_mg_loss:
-                rand_audio_drop = jax.random.uniform(key = self.rng_key, shape = 1)
-                rand_cond_drop = jax.random.uniform(key = self.rng_key, shape = 1)
-                drop_audio_cond = rand_audio_drop < self.audio_drop_prob
-                drop_text = rand_cond_drop < self.audio_cond_prob
-                drop_audio_cond = drop_audio_cond | drop_text
-            else:
-                drop_text = False
-                drop_audio_cond = False
-            
-            pred = self.transformers(x = w,
+            pred = self.transformers(x = inp,
                                      cond = cond, 
                                      text = text, 
                                      time = time,
@@ -936,39 +897,17 @@ class GermanTTS(nnx.Module):
                                      drop_text = drop_text,
                                      mask = mask,
                                      )
-            EMA = optax.ema()
             
-            if use_mg_loss:   # TODO: need to check how ema works.
-                # with torch.no_grad()
-                    guidance_cond = optax.ema()
-                    
-                    
-                    
-                    
-                    
-                    
-            loss = optax.losses.squared_error(pred, flow).mean()
-            loss = loss[rand_span_mask].mean()
-            
-            return loss
+            return pred
         
-        def predict_curation(self,
-                             cond:float["b nd "],
-                             text:int["b nt"],
-                             speed:float =1.0, 
-                             )-> int:
-            duration_in_sec = self._duration_predictor(cond, text)
-            frame_rate = self.mel_spec.sampling_rate // HOP_LENGTH
-            duration = jnp.float32(duration * frame_rate / speed)
-            return duration
         
         def sample(
             self,
-            cond: float["b n d"] | float["b nw"],  # noqa: F722
-            text: int["b nt"] | list[str],  # noqa: F722
-            duration: int | int["b"] | None = None,  # noqa: F821
+            cond: Float[Array, "b n d"] | Float[Array, "b nw"],  # noqa: F722
+            text: Int[Array, "b nt"] | list[str],  # noqa: F722
+            duration: int | Int[Array,"b"] | None = None,  # noqa: F821
             *,
-            lens: int["b"] | None = None,  # noqa: F821
+            lens: Int[Array, "b"] | None = None,  # noqa: F821
             ode_method: Literal["euler", "midpoint", "rk4"] = "rk4",
             steps=32,
             cfg_strength=1.0,
@@ -1152,3 +1091,7 @@ class GermanTTS(nnx.Module):
             model._duration_predictor = duration_predictor
             
             return model
+
+
+if __name__ == "__main__":
+    
