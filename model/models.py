@@ -1091,7 +1091,3 @@ class GermanTTS(nnx.Module):
             model._duration_predictor = duration_predictor
             
             return model
-
-
-if __name__ == "__main__":
-    
