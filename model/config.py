@@ -22,8 +22,10 @@ def get_config_hyperparameters():
     
     config.start_factor = 1e-8
     config.end_factor = 1.0
-    config.warmup_steps
+    config.warmup_steps = 10_000
     config.batch_size = 16
+    config.total_steps = 500_000
+    config.max_grad_norm = 1.0
 
     return config
 
@@ -36,3 +38,4 @@ def get_config_DurationPredictor():
     config.max_duration = 4096
     
     return config
+

@@ -2,12 +2,17 @@
 from __future__ import annotations
 from functools import partial
 from genericpath import exists
+from math import inf
 import os
-from typing import Callable, Iterator
+from typing import Callable, Dict, Iterator, Tuple
 from tqdm import tqdm
  
-
-
+import os
+import sys 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+ 
 # NNs libaries
 # jax
 import jax
@@ -17,8 +22,9 @@ from jax.experimental import mesh_utils
 
 # flax
 import flax
-from flax import nnx
+import flax.nnx as nnx 
 from flax.training import train_state
+
 
 
 # optax
@@ -30,7 +36,7 @@ from optax import ema
 #type hinting & and checkpointing
 from jaxtyping import ArrayLike
 import orbax.checkpoint as ocp
-from etils import epath
+
 
 
 # tensor helpers 
@@ -41,13 +47,14 @@ from einops import rearrange, reduce, repeat
 
 # logging if needed
 from loguru import logger
+import wandb
 
 # Final Model imports
 #from data.DataLoader import Huggingface_Datasetloader
 from models import SAMPLE_RATE, GermanTTS, DurationPredictor, DiT
 from config import get_config_DurationPredictor, get_config_GermanTTS, get_config_hyperparameters
 from ml_collections import config_flags
-from absl import flags
+from data.DataLoader import Huggingface_Datasetloader
 
 
  # Constants that are important for model definition
@@ -59,7 +66,7 @@ global_seed = 24
 class TrainState(train_state.TrainState):
     ema_params:flax.core.FrozenDict = None
     
-@partial(jax.jit, donate_argnums=(0, 1)) # donate_argnums allows XLA to optimize in-place updates
+@nnx.jit
 def train_step_jitted(model: GermanTTS, optimizer: nnx.Optimizer, batch: Dict[str, jnp.ndarray], 
                        max_grad_norm: float, use_flow_matching_loss: bool, ema_model: GermanTTS = None,
                        learning_rate_schedule_fn: Callable[[int], float] = None,
@@ -204,14 +211,17 @@ def calculate_loss(
 
 class GermanTTSTrainerJax:
     def __init__ (self, model: GermanTTS,
-                  optimizer: optax.GradientTransformation,
                   ema_model:GermanTTS,
-                  num_warump_steps:int =  2_000,
+                  num_warmup_steps:int =  2_000,
                   max_grad_norm:float = 1.0,
                   use_mg_loss:bool = False,
                   ema_decay:float = 0.999,
                   total_steps:int = 10_000,
-                  seed:int = 42,
+                  save_step_interval:int = jnp.inf,
+                  optimizer = None,
+                  rngs: nnx.Rngs = None,
+                  seed: int = global_seed, 
+                  project_name: str = "GermanTTS_Training"
                   ):
         
         self.target_sample_rate = SAMPLE_RATE
@@ -220,7 +230,7 @@ class GermanTTSTrainerJax:
         self.model = model
         self.ema_model = ema_model
 
-        self.num_warump_steps = num_warump_steps
+        self.num_warump_steps = num_warmup_steps
         self.use_mg_loss = use_mg_loss
         self.max_grad_norm = max_grad_norm
         self.ema_decay = ema_decay
@@ -229,7 +239,6 @@ class GermanTTSTrainerJax:
         self.num_devices = len(jax.devices())
         logger.info(f"Training start with current number of devices GPU:{self.num_devices}")
         
-        self.rng_key = jax.random.PRNGKey(self.seed)
         self.mesh = Mesh(mesh_utils.create_device_mesh((jax.device_count("gpu"),)), ("data",))
         
         
@@ -237,35 +246,10 @@ class GermanTTSTrainerJax:
             './checkpoints',
             options = ocp.CheckpointManagerOptions(
                 save_decision_policy = 10_000,
-                max_to_keep= 5,
-                checkpoint_name = "GermanTTS"
+                max_to_keep= 5
             )
         )
-        
-        warmup_schedule = optax.linear_schedule(
-            init_value = 1e-8, end_value = 1.0, transition_steps = self.num_warump_steps
-        )
-        decay_steps = self.total_steps - self.num_warump_steps
-        decay_schedule = optax.linear_schedule(
-            
-            init_value = 1.0, end_value = 1e-8, transition_steps=decay_steps
-        )
-        
-        self.learning_rate_schedule_fn = optax.join_schedules(
-            schedules = [warmup_schedule, decay_schedule],
-            boundaries = [self.num_warump_steps]
-            
-        )
-        
-        self.optimizer = nnx.Optimizer(
-            optax.chain(
-                optax.adamw(learning_rate = self.learning_rate_schedule_fn),
-                optax.clip_by_global_norm(self.max_grad_norm),  
-            ),
-            self.model
-        )
-        
-        
+           
     
     def checkpoint_path(self, step:int):
         return f"GermanTTS_{step}"
@@ -276,7 +260,7 @@ class GermanTTSTrainerJax:
             self.chkpt_manager.save(step, ckpt)
         
     
-    def load_checkpoint(self, step:int):
+    def load_checkpoint(self, step:int, rngs:nnx.Rngs = None):
         if self.chkpt_manager.latest_step() is None and step == 0:
             return None, 0
         
@@ -311,6 +295,9 @@ class GermanTTSTrainerJax:
                             )
         
         for batch in progress_bar:
+            
+            current_global_step = self.optimizer.step.item() if isinstance(self.optimizer.step, jax.Array) else self.optimizer.step
+            
             if self.optimizer.step.item() >= self.total_steps:
                 break
             
@@ -344,6 +331,13 @@ class GermanTTSTrainerJax:
                     frames=f"{total_frames / 1e6:.2f}M",
                     step=f"{self.optimizer.step.item()}/{self.total_steps}"
                 )
+                wandb.log({
+                        "train/loss": loss_item,
+                        "train/learning_rate": current_lr,
+                        "train/total_frames_processed_M": total_frames / 1e6,
+                        "train/step": current_global_step,
+                        "epoch": epoch
+                }, step=current_global_step)
 
             epoch_loss += loss_item
             item_count += 1
@@ -390,60 +384,87 @@ class GermanTTSTrainerJax:
                 "num_devices": self.num_devices, # Add num_devices to HPs
             }
             print(f"Hyperparameters: {hps}")
-
+            
+            wandb.config.update(hps)
 
 if __name__ == '__main__':
     
     # get configs of GermanTTS 
     # set to the number of gpus
     os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
-    
-    class DummyDataset:
-        def __init__(self, size = 100):
-            self.size
-
-        def __len__(self):
-            return self.size
-        
-        def __getitem__(self, idx):
-            return {
-                "json":{"text": f"hello world {idx}", "duration": 5.0},
-                "audio": jnp.zeros(24_000 * 5, dtype = jnp.float32)
-            }
-
-        def shuffle(self, seed):
-            return self
-
-        def filter(self, fn):
-            return self    
+   
     
     GermanTTS_config = get_config_GermanTTS()
-    breakpoint()
+    optimizer_params = get_config_hyperparameters()
+    
+    key_seed = jax.random.PRNGKey(42)
+    
+    params_key, dropout_key, other_key = jax.random.split(key_seed, 3)
+    
+    rngs = nnx.Rngs(params = params_key, dropout = dropout_key, other = other_key)
+    
     diffusion_transformer = DiT(dim = GermanTTS_config["dim"],
                                 depth = GermanTTS_config["depth"],
                                 heads = GermanTTS_config["heads"],
                                 text_dim = GermanTTS_config["text_dim"],
-                                ff_mult =  GermanTTS_config["ff_mult"]
+                                ff_mult =  GermanTTS_config["ff_mult"],
+                                rngs=nnx.Rngs(params = params_key, dropout = dropout_key, other = other_key),
                                 )
     
-    model = GermanTTS(transformer = diffusion_transformer ,tokenizer=None)
+    model = GermanTTS(transformer = diffusion_transformer , tokenizer=None, rngs = rngs)
 
-    base_optimizer = optax.adamw(learning_rate=1e-4)
+    ema_model = GermanTTS(transformer = diffusion_transformer ,tokenizer=None, rngs = rngs)
+    
+    breakpoint()
+
+# Inside the debugger, after breakpoint():
+    # print("\n--- Deep Scan for Problematic Values ---")
+    # find_problematic_values(model)
+    # print("--- End Deep Scan ---")
+
+    
+    warmup_schedule = optax.linear_schedule(
+        init_value=1e-8, end_value=1.0, transition_steps = optimizer_params["warmup_steps"] # Use config for these values
+    )
+    decay_steps = optimizer_params["total_steps"] - optimizer_params["warmup_steps"]
+    decay_schedule = optax.linear_schedule(
+        init_value=1.0, end_value=1e-8, transition_steps=decay_steps
+    )
+    learning_rate_schedule_fn = optax.join_schedules(
+        schedules=[warmup_schedule, decay_schedule],
+        boundaries=[optimizer_params["warmup_steps"]]
+    )
+
+    # 3. Create the Optax gradient transformation chain
+    optax_transformer = optax.chain(
+        optax.adamw(learning_rate=learning_rate_schedule_fn),
+        optax.clip_by_global_norm(optimizer_params["max_grad_norm"]), # Use config for this
+    )
+
+    # 4. Create the nnx.Optimizer instance
+    optimizer = nnx.Optimizer(model = model, tx=optax_transformer)
+    
+    breakpoint()
+    #train_state = train_state.TrainState.create(tx = optax_transformer, params = model, )
+
 
     trainer = GermanTTSTrainerJax(
         model=model,
-        base_optimizer_config=base_optimizer,
+        ema_model=ema_model,
+        optimizer = optimizer,
+        save_step_interval = 100,
         total_steps=1000,
         num_warmup_steps=100,
         use_mg_loss=True,
         ema_decay=0.9999,
         max_grad_norm=1.0,
-        save_step=100,
+        rngs = nnx.Rngs(params = params_key, droput = dropout_key, other = other_key)
     )
 
-    train_dataset = Huggingface_Datasetloader(None) # here i should parse the args
+    train_dataset = Huggingface_Datasetloader("") # here i should parse the args
 
     print("Starting training...")
+    
     trainer.train(
         train_dataset=train_dataset,
         batch_size=2,
@@ -453,16 +474,7 @@ if __name__ == '__main__':
 
 
 
-
-
-
-
-
-
-
-
-
-
+ 
 
 
 

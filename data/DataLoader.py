@@ -17,7 +17,7 @@ from datasets import load_from_disk
 from functools import partial
 import os
 
-from PreProcesesAudio import (
+from data.PreProcesesAudio import (
     MelSpec,
     Resampler
 )
