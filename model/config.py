@@ -22,7 +22,7 @@ def get_config_hyperparameters():
     
     config.start_factor = 1e-8
     config.end_factor = 1.0
-    config.warmup_steps
+    config.warmup_steps = 1_000
     config.batch_size = 16
 
     return config

@@ -561,7 +561,7 @@ class DiT(nnx.Module):
         self.transformers_blocks = [DiTBlock(dim=dim, heads=heads,dim_head=dim_head, ff_mult=ff_mult, dropout=dropout) for _ in range(depth)]
         
         self.norm_out = AdaLayernNormZero(dim)
-        self.proj_out = nnx.Linear(dim, mel_dim, use_bias=False,kernel_init = nnx.initializers.lecun_normal)
+        self.proj_out = nnx.Linear(dim, mel_dim, use_bias=False,kernel_init = nnx.initializers.lecun_normal())
         
     def __call__ (self, x:Float[Array,"b n d"], cond:Float[Array,"b n d"], text:Int[Array, "b nt"], time:Float[Array,"b"], drop_audio_cond, drop_text, mask:Bool[Array,"b n"] | None = None):
         

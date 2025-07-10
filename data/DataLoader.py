@@ -10,17 +10,17 @@ dt - dimension text
 """
 
 # usefull functions from huggingface
+from json import load
 from random import sample
 from datasets import load_dataset
 from datasets import load_from_disk
+import jax.numpy as jnp
+import tqdm
 
 from functools import partial
 import os
 
-from PreProcesesAudio import (
-    MelSpec,
-    Resampler
-)
+from GermanTTS.data.PreProcesesAudio import Resample, MelSpec
 
 # helpful array handling libaries
 import datasets
@@ -43,47 +43,45 @@ class Huggingface_Datasetloader:
     """
     This class provides an easy way to load an huggingface audio dataset and convert it quickly for TTS training
     args:
-    path_to_data:
-    target_sample_rate:
+        name_of_dataset:str = this variable should point to the huggingface repo to download the data from 
+        if_strea:bool = decide if audio should be streamable when loading dataset
+        language:str = decide which language to load from
+        split:str = indicate which split is desired
+        from_disk_directory:str = path to directory of preprocessed data to load form 
     
     """
     
-    def __init__(  #TODO read the data_dir also for pre_processed data
+    def __init__(
         self,
         name_of_dataset:str,
-        #min_duration:float = 0,     # min 
-        #max_duration:float = 10,    # max duration when i cut of the sample, should be less than > 10 sec
         if_stream: bool = False,
-        language:str = "german",
+        language:str = "",
         split:str = "",
-        cache_dir:str = "",
+        from_disk_directory:str = "",
     ):
            
               
-        self.if_stream = if_stream  # maybe not neccessary if will just have it already available
-        self.language = language  # specify language to load 
-        self.split = split  # train, dev or test
+        self.if_stream = if_stream  
+        self.language = language
+
+        self.split = split  
         self.name_of_dataset = name_of_dataset
 
+        self.from_disk_directory = from_disk_directory
                
         # check if datset is already loaded in cache
-        if os.path.isdir(cache_dir):
+        if name_of_dataset is not None:
             self.data = load_dataset(path = name_of_dataset, 
-                                     name = self.language, 
-                                     cache_dir=cache_dir)
-        else:  # relead dataset if not already done
-            self.data = load_dataset(path = self.name_of_dataset,
                                      name = self.language,
-                                     split = self.split,
-                                     streaming = self.if_stream,
-                                     )
+                                     split = self.split)
+            self.sampling_rate = self.data[0]["audio"]["sampling_rate"]
+            self.dtype_to_resample_to = self.data[0]["audio"]["array"].dtype
             self.data = self.data.with_format("torch")
-        
-        
-        # basic information for the preprocessing
-        self.sampling_rate = self.data[0]["audio"]["sampling_rate"]
-        self.dtype_to_resample_to = self.data[0]["audio"]["array"].dtype
-        
+        else: 
+            self.data = load_from_disk(dataset_path = self.from_disk_directory,
+                                       keep_in_memory = False,
+                                     )
+            
         
         
     def get_data(self):
@@ -111,12 +109,14 @@ class Huggingface_Datasetloader:
         """
         safe preprocessed data, not load data not needed because is catched if in constructur already
         """
+        self.data = self.data.with_format("jax")
         self.data.save_to_disk(directory_to_save_to)
+        logger.info(f"Data got saved to this path: {directory_to_save_to}")
     
     
 
     @logger.catch
-    def process_dataset(self, num_proc=4, batch_size = 4, make_preprocessor = None, safe_data_path:str = ""):
+    def process_data(self, num_proc=4, batch_size = 4, make_preprocessor = None, safe_data_path:str = ""):
         """ give any function and it will tranform the data
             and store the transformed data in a new path so that it is very easy to access later on.
         Args:
@@ -141,35 +141,79 @@ class Huggingface_Datasetloader:
                                   )
         
         # safe data if data path is provided
-        if os.path.exists(safe_data_path):
-            self.__safe_data__(safe_data_path)
+       
+        self.__safe_data__(safe_data_path)
         
         logger.info(f"Preprocessing finished, data_size: {self.data.shape}, saved to {safe_data_path}")
         
+    def extract_vocab(self, num_proc=4, batch_size = 4,name_of_text:str = None, safe_data_path:str = ""):
+        """
+        Extracts a set of unique characters from the specified text column of the dataset.
+        """
+
+       
+        logger.info(f"num_proc: {num_proc}, batch_size: {batch_size}, creation of vocab for data_size: {self.data.shape}")
+
+        def extract_batch_vocab(batch):
+            all_chars = set()
+            for text in batch[name_of_text]:
+                all_chars.update(text)
+            return {"vocab": [list(all_chars)]}  # Return wrapped in list to preserve batch formatting
+
+
+
+        vocab_data = self.data.map(extract_batch_vocab,
+                              batched = True,
+                              batch_size = batch_size, 
+                              num_proc= num_proc,
+                              remove_columns=self.data.column_names,
+                              load_from_cache_file=True, 
+                              keep_in_memory= True
+                              )
         
-    def get_dataset(self) -> datasets.dataset_dict:
-        """
-        get an already existing Dataset that was also downloaded        
-        Returns:
-            datasets.dataset_dict: _description_
-        """
-        return self.data
-    
-    def group_data_speaker(self):
-        """
-        This function should group data of one specific speaker, e.g. for OrpheusTTS training
-        """
-        pass
-    
-    
-    def plot_mel_spectrogram(self,mel_spec, t, sr=24_000, n_mels=80):
+
+        merged_chars = set()
+        for batch_vocab in vocab_data["vocab"]:
+            for char in batch_vocab:
+                merged_chars.add(char)
+
+        unique_chars = sorted(merged_chars)
+        logger.info(f"Extracted vocab of size {len(unique_chars)}")
+        
+        # safe data if data path is provided
+       
+        if safe_data_path:
+            vocab_file = f"{safe_data_path.rstrip('/')}/vocab.txt"
+            with open(vocab_file, "w", encoding="utf-8") as f:
+               for char in unique_chars:
+                    if char == "\n":
+                      f.write("\\n\n")  # escape newline for readability
+                    elif char == "\t":
+                      f.write("\\t\n")  # escape tab for readability
+                    else:
+                      f.write(f"{char}\n")
+        logger.info(f"Vocabulary saved to {vocab_file}")
+
+        return unique_chars
+        
+        logger.info(f"Preprocessing finished, data_size: {self.data.shape}, saved to {safe_data_path}")
+
+
+        
+    def plot_mel_spectrogram(self, sr=24_000):
         """Plot the Mel spectrogram using matplotlib."""
+        # take sample
+        sample_mel = self.data[:1]["mel"]
+        sampel_transcript = self.data[:1]["transcript"]
+        n_mels = sample_mel.shape[0]
+        t = jnp.arange(0, sample_mel.shape[1]) 
+        
         plt.figure(figsize=(10, 4))
-        plt.imshow(mel_spec, aspect='auto', origin='lower', cmap='magma', extent=[t.min(), t.max(), 0, n_mels])
+        plt.imshow(sample_mel, aspect='auto', origin='lower', cmap='magma', extent=[jnp.min(t), jnp.max(t), 0, n_mels])
         plt.colorbar(label="Log Magnitude")
         plt.xlabel("Time (s)")
         plt.ylabel("Mel Frequency Bins")
-        plt.title("Mel Spectrogram")
+        plt.title(sampel_transcript)
         plt.show()
 
     def group_data(self, speaker_id):
@@ -180,29 +224,4 @@ class Huggingface_Datasetloader:
         """ 
         filterd_data = self.data.filter(lambda example: example["speaker_id"] == speaker_id)
         return filterd_data
-
-  
-    
-# example
-
-# facebook_german = Huggingface_Dataset(name_of_dataset="facebook/multilingual_librispeech",
-#                                       if_stream = False,
-#                                       language = "german", 
-#                                       split = "1_hours",
-#                                       cache_dir = "/home/dheinz/Documents/GermanTTS/res/example/1_hours",
-#                                       )
-                                       
-common_voice = Huggingface_Datasetloader(name_of_dataset = "mozilla-foundation/common_voice_17_0",
-                                    if_stream = False, 
-                                    language = "de",
-                                     split = "train",
-                                    cache_dir = "res/example/train")           
-
-
-#facebook_german.process_dataset(num_proc=1, batch_size= 16, make_preprocessor = preprocess_facebook_librispeech, safe_data_path= "/home/dheinz/Documents/GermanTTS/res/example/1_hours")
-
-
-filterd_dataset = load_from_disk("/home/dheinz/Documents/GermanTTS/res/example/1_hours")
-
-print("successful run")
 

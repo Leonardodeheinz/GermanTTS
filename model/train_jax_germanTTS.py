@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import partial
 from genericpath import exists
 import os
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Tuple, Dict
 from tqdm import tqdm
  
 
@@ -20,32 +20,36 @@ import flax
 from flax import nnx
 from flax.training import train_state
 
+# numpy 
+import numpy as np
+
 
 # optax
-from numpy.core.umath import dtype
+
 import optax
 from optax import adamw
 from optax import ema
 
-#type hinting & and checkpointing
+#type hinting & and checkpointing & Dataloading
 from jaxtyping import ArrayLike
 import orbax.checkpoint as ocp
-from etils import epath
+from torch.utils.data import DataLoader, Dataset
 
 
 # tensor helpers 
 
-from models import lens_to_mask, mask_from_frac_lengths, mask_from_start_end_indicies, maybe_masked_mean
-from jaxtyping import Float, Array, PyTree, Bool, Int
+from GermanTTS.model.models import lens_to_mask, mask_from_frac_lengths, mask_from_start_end_indicies, maybe_masked_mean
+from jaxtyping import Float, Array, PyTree, ArrayLike 
 from einops import rearrange, reduce, repeat
 
 # logging if needed
 from loguru import logger
+import wandb
 
 # Final Model imports
 #from data.DataLoader import Huggingface_Datasetloader
-from models import SAMPLE_RATE, GermanTTS, DurationPredictor, DiT
-from config import get_config_DurationPredictor, get_config_GermanTTS, get_config_hyperparameters
+from GermanTTS.model.models import SAMPLE_RATE, GermanTTS, DurationPredictor, DiT
+from GermanTTS.model.config import get_config_DurationPredictor, get_config_GermanTTS, get_config_hyperparameters
 from ml_collections import config_flags
 from absl import flags
 
@@ -55,11 +59,67 @@ HOP_LENGTH = 256
 SAMPLE_RATE = 24_000
 global_seed = 24
 
+class DynamicsBatchLoader:
+    def __init__(self,
+                 dataset, 
+                 collate_fn,
+                 batch_size:int = 32,
+                 max_batch_frames:int = 4096,
+                 max_duration:float = 20.0,
+                 **dataloader_kwargs,
+                 ):
+        
+        self.max_batch_frames = max_batch_frames
+        self.max_duration = max_duration
+        self.dataloader = DataLoader(
+            dataset,
+            batch_size = batch_size,
+            collate_fn = self._collate_wrapper,
+            **dataloader_kwargs,
+        )
+        self.collate_fn = collate_fn
+        
+    def _collate_wrapper(self, batch):
+        return dynamic_batch_collate_fn(batch, self.collate_fn, self.max_batch_frames, self.max_duration)
+
+   
+   
+def collate_fn(batch, audio = None, tokenizer = None):
+    if audio is None or len(audio) == 0:
+        return None
+    
+    audio_lengths = jnp.array([item["audio_duration"] for item in batch])
+    max_audio_length = jnp.max(audio_lengths)
+    
+    padding_interval = 1 * 24_000
+    max_audio_length  = (max_audio_length + padding_interval -1) // padding_interval * padding_interval
+    
+    padded_audio = []
+    for item in audio:
+        padding = (0, max_audio_length - item.shape[1])
+        padded_spec = jnp.pad(item, padding, mode = "empty")
+        padded_audio.append(padded_spec)
+        
+    padded_audio = jnp.stack(padded_audio, axis = 0)
+    
+    text = [item["transcript"] for item in batch]
+    text = tokenizer(text)
+    
+    return dict(audio = padded_audio, audio_lengths = audio_lengths, text = text)
+
+
+def dynamic_collate_fn(batch, batch_collate_fn, max_batch_frame, max_duration = None):
+    cum_length = 0
+    mel_tensors = []
+    
+    for item in batch:
+        mel = item[mel]
+        mel_length = mel.shape[-1]
 
 class TrainState(train_state.TrainState):
     ema_params:flax.core.FrozenDict = None
     
-@partial(jax.jit, donate_argnums=(0, 1)) # donate_argnums allows XLA to optimize in-place updates
+nnx.jit()
 def train_step_jitted(model: GermanTTS, optimizer: nnx.Optimizer, batch: Dict[str, jnp.ndarray], 
                        max_grad_norm: float, use_flow_matching_loss: bool, ema_model: GermanTTS = None,
                        learning_rate_schedule_fn: Callable[[int], float] = None,
@@ -212,6 +272,7 @@ class GermanTTSTrainerJax:
                   ema_decay:float = 0.999,
                   total_steps:int = 10_000,
                   seed:int = 42,
+                  project_name: str = "GermanTTS_Training",
                   ):
         
         self.target_sample_rate = SAMPLE_RATE
@@ -294,7 +355,7 @@ class GermanTTSTrainerJax:
         
         initial_params = self.model.__init__() 
 
-    def _train_epoch(self, train_dataloader: Iterator[Dict[str, jnp.ndarray]], epoch: int, save_step: int) -> float:
+    def _train_epoch(self, dataset, epoch: int, save_step: int, batch_size:int = 16) -> float:
         """
         Performs training for a single epoch.
         Returns the average loss for the epoch.
@@ -303,14 +364,23 @@ class GermanTTSTrainerJax:
         item_count = 0
         total_frames = 0
         
+        train_dataloader = DynamicsBatchLoader(dataset = dataset, 
+                                               collate_fn = collate_fn,
+                                               batch_size = batch_size)
+        
+        
         progress_bar = tqdm(train_dataloader,
                             desc = f"Epoch {epoch + 1}",
                             unit = "batch",
-                            total = len(train_dataloader), # TODO: this will not work
+                            total = len(train_dataloader),
                             disable = jax.process_index() != 0,
                             )
         
         for batch in progress_bar:
+            
+            
+            current_global_step = self.optimizer.step.item() if isinstance(self.optimizer.step, jax.Array) else self.optimizer.step
+            
             if self.optimizer.step.item() >= self.total_steps:
                 break
             
@@ -344,6 +414,15 @@ class GermanTTSTrainerJax:
                     frames=f"{total_frames / 1e6:.2f}M",
                     step=f"{self.optimizer.step.item()}/{self.total_steps}"
                 )
+                
+                wandb.log({
+                        "train/loss": loss_item,
+                        "train/learning_rate": current_lr,
+                        "train/total_frames_processed_M": total_frames / 1e6,
+                        "train/step": current_global_step,
+                        "epoch": epoch
+                }, step=current_global_step)
+
 
             epoch_loss += loss_item
             item_count += 1
@@ -360,8 +439,8 @@ class GermanTTSTrainerJax:
         self,
         train_dataset,
         batch_size=12,
-        max_batch_frames=4096,
-        max_duration=4096,
+        max_batch_frames= 16384, # even higher since gpu h100 is default in my case
+        max_duration= 16384,
         num_workers=0, # num_workers for DataLoader (not JAX processes)
         restore_step=None,
         save_step=1000,
@@ -390,234 +469,18 @@ class GermanTTSTrainerJax:
                 "num_devices": self.num_devices, # Add num_devices to HPs
             }
             print(f"Hyperparameters: {hps}")
-
-
-if __name__ == '__main__':
-    
-    # get configs of GermanTTS 
-    # set to the number of gpus
-    os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
-    
-    class DummyDataset:
-        def __init__(self, size = 100):
-            self.size
-
-        def __len__(self):
-            return self.size
         
-        def __getitem__(self, idx):
-            return {
-                "json":{"text": f"hello world {idx}", "duration": 5.0},
-                "audio": jnp.zeros(24_000 * 5, dtype = jnp.float32)
-            }
+        # --- Added training loop ---
+        for epoch in range(self.epochs):
+            if self.optimizer.step.item() >= self.total_steps:
+                logger.info(f"Reached total_steps ({self.total_steps}), stopping training.")
+                break
 
-        def shuffle(self, seed):
-            return self
+            avg_loss = self._train_epoch(train_dataset, epoch, save_step, batch_size)
+            if jax.process_index() == 0:
+                logger.info(f"Epoch {epoch + 1}/{self.epochs} finished, Average Loss: {avg_loss:.4f}")
 
-        def filter(self, fn):
-            return self    
-    
-    GermanTTS_config = get_config_GermanTTS()
-    breakpoint()
-    diffusion_transformer = DiT(dim = GermanTTS_config["dim"],
-                                depth = GermanTTS_config["depth"],
-                                heads = GermanTTS_config["heads"],
-                                text_dim = GermanTTS_config["text_dim"],
-                                ff_mult =  GermanTTS_config["ff_mult"]
-                                )
-    
-    model = GermanTTS(transformer = diffusion_transformer ,tokenizer=None)
-
-    base_optimizer = optax.adamw(learning_rate=1e-4)
-
-    trainer = GermanTTSTrainerJax(
-        model=model,
-        base_optimizer_config=base_optimizer,
-        total_steps=1000,
-        num_warmup_steps=100,
-        use_mg_loss=True,
-        ema_decay=0.9999,
-        max_grad_norm=1.0,
-        save_step=100,
-    )
-
-    train_dataset = Huggingface_Datasetloader(None) # here i should parse the args
-
-    print("Starting training...")
-    trainer.train(
-        train_dataset=train_dataset,
-        batch_size=2,
-        max_batch_frames=24000 * 10,
-    )
-    print("Training complete.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# class DynamicBatchDataLoader:
-#     def __init__(self,
-#                  collate_fn,
-#                  batch_size = 32,
-#                  max_batch_frame = 4096,
-#                  max_duration = None,
-#                  **dataloader_kwargs,
-#                  ):
-#         self.max_batch_frames = max_batch_frame
-#         self.max_duration = max_duration
-#         self.dataloader = Huggingface_Datasetloader(
-#             **dataloader_kwargs
-#         )
-#         self.collate_fn = collate_fn
-        
-        
-#     def _collate_wrapper(self, batch):
-#         return dynamic_batch_collate_fn(batch, self.collate_fn, self.max_batch_frames, self.max_duration)
-    
-#     def __iter__(self):
-#         batch_iterator = iter(self.dataloader)
-#         while True:
-#             try:
-#                 batch = next(batch_iterator)
-                
-#                 while batch is None:
-#                     batch =next(batch_iterator)
-#                 yield batch
-#             except StopIteration:
-#                 break
-        
-    
-    
-    
-    
-
-# def collate_fn(batch, audio = None, tokenizer = None):
-#     if audio is None:
-#         audio = [jnp.array(item[""][""], dtype = jnp.float32) for item in batch]
-
-#     if audio is None or len(audio) == 0:
-#         return None
-    
-#     audio_lengths = jnp.array([item.shape[-1] for item in audio], dtype = jnp.float64)
-#     max_audio_length = audio_lengths.amax()
-    
-#     padding_interval = 1 * 24_000
-#     max_audio_length = (max_audio_length + padding_interval -1) // padding_interval + padding_interval
-    
-#     padded_audio = []
-#     for item in audio:
-#         padding = (0, max_audio_length - item.size(-1))
-#         padded_sec = jnp.pad(item, padding, mode = "empty")
-#         padded_audio.append(padded_sec)
-    
-#     padded_audio = jnp.stack(padded_audio , axis = 0)
-    
-#     text = [item["text"] for item in batch]
-#     text = tokenizer(text)
-    
-#     return dict(audio = padded_audio, audio_lengths = audio_lengths, text = text)
-        
-    
-
-# def dynamic_batch_collate_fn(batch, batch_collate_fn, max_batch_frames, max_duration = None):
-#     cum_length = 0
-#     valid_items = []
-#     audio_tensors = []
-    
-#     max_duration = max_duration if max_duration is not None else 4096
-    
-#     for idx, item in enumerate(batch):
-        
-
-
-# class GermanTTS_Trainer():
-#     def __init__ (self,
-#                   model: GermanTTS,
-#                   optimizer = optax.adamw,
-#                   num_warump_steps:int = 2_000,
-#                   max_grad_norm:float = 1.0,
-#                   sample_rate:int = 24_000,
-#                   use_mg_loss:bool = False,
-#                   ema_kwargs:dict = dict()
-#                   ):
-        
-#         self.target_sample_rate = sample_rate
-        
-#         self.model = model 
-#         self.optimizer = optimizer 
-        
-#         self.num_warmup_steps = num_warump_steps
-        
-#         self.ema_state = optax.ema(self.model.parameters)
-        
-#         self.max_grad_norm = max_grad_norm
-        
-
-
-#         self.chkptr = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler)
-        
-#     def checkpoint_path(self, step:int):
-#         return f"GermanTTS_{step}.pt"
-    
-#     def save_checkpoint(self, step:str, chkpt_dir:str):             # For now alright but TODO: because it seems a bit of 
-#         _, train_state = nnx.split(self.model)
-#         path = chkpt_dir + "model_checkpoint" + "_" + "step"
-#         self.chkptr.save(path, args = ocp.args.StandardSave(train_state))
-#         logger.info(f"State is saved at step:{step} in diretory: {path}")
-        
-        
-#     # def load_checkpoint(self, step:str = 0):   # TODO: but not essentially important right now
-#     #     checkpoint
-        
-        
-        
-        
-
-# @jax.jit
-# def train_GermanTTS(train_dataset, 
-#                     model,
-#                     optimizer,
-#                     * ,total_steps:int = 100_000, batch_size:int = 12, max_batch_frames:int = 4096, max_duration = 4096, save_step:int = 1000): 
-    
-    
-    
-    
-    
-    
-    
-    
-
-# class DurationTrainer():
-#     def __init__ (self, model: DurationPredictor, optimizer = optax.adamw, num_warump_steps:int = 1_000, max_grad_norm:float = 1.0, sample_rate:int = 24_000):
-        
-#         self.target_sample_rate = sample_rate
-#         self.model = model
-#         self.optimizer = optimizer
-        
-#         self.num_warump_steps = num_warump_steps
-#         self.max_grad_norm = max_grad_norm
-        
-#     def checkpoint_path(self, step:int):
-#         return f"duration_{step}.pt"
-    
-       
-#     def save_checkpoint(self, step:str, chkpt_dir:str):
-#         _, train_state = nnx.split(self.model)
-#         path = chkpt_dir + "model_checkpoint" + "_" + "step"
-#         self.chkptr.save(path, args = ocp.args.StandardSave(train_state))
-#         logger.info(f"State is saved at step:{step} in diretory: {path}")
-    
-    
+            # You might want to save a checkpoint at the end of each epoch as well
+            # if jax.process_index() == 0:
+            #     self.save_checkpoint(self.optimizer.step.item(), TrainState()) # Save end of epoch state
+        # --- End of added training loop ---
