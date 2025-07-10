@@ -2,12 +2,17 @@
 from __future__ import annotations
 from functools import partial
 from genericpath import exists
+from math import inf
 import os
-from typing import Callable, Iterator, Tuple, Dict
+from typing import Callable, Dict, Iterator, Tuple
 from tqdm import tqdm
  
-
-
+import os
+import sys 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+ 
 # NNs libaries
 # jax
 import jax
@@ -17,7 +22,7 @@ from jax.experimental import mesh_utils
 
 # flax
 import flax
-from flax import nnx
+import flax.nnx as nnx 
 from flax.training import train_state
 
 # numpy 
@@ -45,13 +50,14 @@ from einops import rearrange, reduce, repeat
 # logging if needed
 from loguru import logger
 import wandb
+import wandb
 
 # Final Model imports
 #from data.DataLoader import Huggingface_Datasetloader
 from GermanTTS.model.models import SAMPLE_RATE, GermanTTS, DurationPredictor, DiT
 from GermanTTS.model.config import get_config_DurationPredictor, get_config_GermanTTS, get_config_hyperparameters
 from ml_collections import config_flags
-from absl import flags
+from data.DataLoader import Huggingface_Datasetloader
 
 
  # Constants that are important for model definition
@@ -264,9 +270,8 @@ def calculate_loss(
 
 class GermanTTSTrainerJax:
     def __init__ (self, model: GermanTTS,
-                  optimizer: optax.GradientTransformation,
                   ema_model:GermanTTS,
-                  num_warump_steps:int =  2_000,
+                  num_warmup_steps:int =  2_000,
                   max_grad_norm:float = 1.0,
                   use_mg_loss:bool = False,
                   ema_decay:float = 0.999,
@@ -281,7 +286,7 @@ class GermanTTSTrainerJax:
         self.model = model
         self.ema_model = ema_model
 
-        self.num_warump_steps = num_warump_steps
+        self.num_warump_steps = num_warmup_steps
         self.use_mg_loss = use_mg_loss
         self.max_grad_norm = max_grad_norm
         self.ema_decay = ema_decay
@@ -290,7 +295,6 @@ class GermanTTSTrainerJax:
         self.num_devices = len(jax.devices())
         logger.info(f"Training start with current number of devices GPU:{self.num_devices}")
         
-        self.rng_key = jax.random.PRNGKey(self.seed)
         self.mesh = Mesh(mesh_utils.create_device_mesh((jax.device_count("gpu"),)), ("data",))
         
         
@@ -298,35 +302,10 @@ class GermanTTSTrainerJax:
             './checkpoints',
             options = ocp.CheckpointManagerOptions(
                 save_decision_policy = 10_000,
-                max_to_keep= 5,
-                checkpoint_name = "GermanTTS"
+                max_to_keep= 5
             )
         )
-        
-        warmup_schedule = optax.linear_schedule(
-            init_value = 1e-8, end_value = 1.0, transition_steps = self.num_warump_steps
-        )
-        decay_steps = self.total_steps - self.num_warump_steps
-        decay_schedule = optax.linear_schedule(
-            
-            init_value = 1.0, end_value = 1e-8, transition_steps=decay_steps
-        )
-        
-        self.learning_rate_schedule_fn = optax.join_schedules(
-            schedules = [warmup_schedule, decay_schedule],
-            boundaries = [self.num_warump_steps]
-            
-        )
-        
-        self.optimizer = nnx.Optimizer(
-            optax.chain(
-                optax.adamw(learning_rate = self.learning_rate_schedule_fn),
-                optax.clip_by_global_norm(self.max_grad_norm),  
-            ),
-            self.model
-        )
-        
-        
+           
     
     def checkpoint_path(self, step:int):
         return f"GermanTTS_{step}"
@@ -337,7 +316,7 @@ class GermanTTSTrainerJax:
             self.chkpt_manager.save(step, ckpt)
         
     
-    def load_checkpoint(self, step:int):
+    def load_checkpoint(self, step:int, rngs:nnx.Rngs = None):
         if self.chkpt_manager.latest_step() is None and step == 0:
             return None, 0
         

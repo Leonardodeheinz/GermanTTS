@@ -82,6 +82,6 @@ if __name__ == "__main__":
     )
     
     # preprocess the dataset
-    dataset.process_dataset(num_proc=1, batch_size= 256, make_preprocessor = preprocess_facebook_librispeech, safe_data_path= "GermanTTS/data/processed_data/librispeech_german_preprocessed")
+    dataset.process_data(num_proc=1, batch_size= 256, make_preprocessor = preprocess_facebook_librispeech, safe_data_path= "GermanTTS/data/processed_data/librispeech_german_preprocessed")
     
     logger.info("Dataset preprocessing completed successfully.")

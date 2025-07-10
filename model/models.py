@@ -12,14 +12,16 @@ c - channel dimensions
 # neural network libaries
 
 from multiprocessing import Value
+import rlcompleter
 from typing import Callable, Literal
+from urllib.robotparser import RobotFileParser
 import flax.serialization
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import flax
-from flax import nnx
+import flax.nnx as nnx
 import optax
 import torch
 import safetensors.flax
@@ -132,7 +134,11 @@ class Buffer(nnx.Variable):
 
 
 class RotaryEmbedding(nnx.Module):
-    def __init__(self, dim, use_xpos, scale_base, interpolation_factor, base, base_rescale_factor):
+    def __init__(self, dim, use_xpos:bool = False, 
+                 scale_base:int = 512, 
+                 interpolation_factor:float = 1.0,
+                 base:float = 10_000,
+                 base_rescale_factor:float = 1.0):
         
         base *= base_rescale_factor ** (dim / (dim-2))
         
@@ -172,7 +178,7 @@ class RotaryEmbedding(nnx.Module):
         
         power = (t - (max_pos // 2)) / self.buffer_scale
         scale = self.buffer_scale ** rearrange(power, "n -> n 1")
-        scale = jnp.split((scale, scale), axis = -1)  # TODO: jnp.split is not the same as torch.unbind !!!
+        scale = jnp.stack((scale, scale), axis = -1)  
         scale = rearrange(scale, "... d r -> (d r)")
         
         return freqs, scale
@@ -208,9 +214,9 @@ def apply_rotary_pos_emb(t, freqs, scale=1):
 class GRN(nnx.Module):
 
     
-    def __init__(self, dim:int):
-        self.gamma = nnx.Param("gamma", jnp.zeros(1, 1, dim))
-        self.beta = nnx.Param("beta", jnp.zeros(1, 1, dim))
+    def __init__(self, dim:int, rngs:nnx.Rngs = None):
+        self.gamma = nnx.Param("gamma", jnp.zeros(1, 1, dim), rngs = rngs)
+        self.beta = nnx.Param("beta", jnp.zeros(1, 1, dim), rngs = rngs)
     
     def __call__(self, x):
         Gx = jnp.linalg.norm(x, "fro", axis=1, keepdim = True)
@@ -223,18 +229,18 @@ class GRN(nnx.Module):
 class ConvNeXtV2Block(nnx.Module):
 
     
-    def __init__(self, dim:int, intermidiate_dim:int , dilation:int = 1):
+    def __init__(self, dim:int, intermidiate_dim:int , dilation:int = 1, rngs:nnx.Rngs = None):
         
         # depthwise conv
         padding = (dilation * (7 - 1)) // 2
-        self.dwconv = nnx.Conv(dim, dim, kernel_size = 7, padding = padding, dilation = dilation)
-        self.norm = nnx.LayerNorm(dim, eps = 1e-6) 
+        self.dwconv = nnx.Conv(dim, dim, kernel_size = 7, padding = padding, dilation = dilation, rngs = rngs)
+        self.norm = nnx.LayerNorm(dim, eps = 1e-6, rngs = rngs) 
     
         # pointwise conv
-        self.pwconv1 = nnx.Linear(dim, intermidiate_dim)
+        self.pwconv1 = nnx.Linear(dim, intermidiate_dim, rngs = rngs)
         self.act = nnx.gelu()
-        self.grn = GRN(intermidiate_dim)
-        self.pwconv2 = nnx.Linear(intermidiate_dim, dim)
+        self.grn = GRN(intermidiate_dim, rngs)
+        self.pwconv2 = nnx.Linear(intermidiate_dim, dim, rngs = rngs)
     
 
     def __call__(self, x:jnp.ndarray) -> jnp.ndarray:
@@ -260,7 +266,8 @@ class SinusPositonalEmbedding(nnx.Module):
     def __call__(self, x:jnp.ndarray, scale = 1000):
         device = x.device
         half_dim = self.dim // 2
-        emb = jnp.log(10_000) / half_dim - 1                                # TODO: check if output and input are valid
+        emb = jnp.log(10_000) / half_dim - 1                               
+
         emb = jnp.exp(jnp.arange(half_dim, device = device).float() * -emb)
         emb = scale * jnp.expand_dims(x, 1) * jnp.expand_dims(emb, 0)
         emb = jnp.concat((jnp.sin(emb),jnp.cos(emb)), axis = 1)
@@ -269,66 +276,73 @@ class SinusPositonalEmbedding(nnx.Module):
 # Convolutional postion embedding
 
 class ConvPositionalEmbedding(nnx.Module):
-    def __init__(self, dim:int, kernel_size=31, groups=16):
+    def __init__(self, dim:int, kernel_size=31, groups=16, rngs:nnx.Rngs = None):
         assert divisible_by(dim, 2)
         padding_size = kernel_size // 2
-        self.conv1d = nnx.Sequential(
-            nnx.Conv(dim, dim, kernel_size = kernel_size, groups = groups, padding = padding_size),
-            jax.nn.mish(), #noqa F722
-            nnx.Conv(dim, dim, kernel_size = kernel_size, groups = groups, padding = padding_size),
-            jax.nn.mish()
-        )
-
+        self.conv1d_1 = nnx.Conv(dim, dim, kernel_size = kernel_size, feature_group_count = groups, padding = padding_size, rngs = rngs)
+        self.conv1d_2 = nnx.Conv(dim, dim, kernel_size = kernel_size, feature_group_count = groups, padding = padding_size, rngs = rngs)
+        
     def __call__(self, x:Float[Array, "b n d"], mask:Bool[Array,"b n"] | None = None):
         if exists(mask):
             mask = mask[..., None]
-            jnp.where(mask, x,0.0)
+            jnp.where(mask, x, 0.0)
+        
+        # TODO: this part could be critical 
         
         x = rearrange(x, "b n d -> b d n")
-        x = self.conv1d(x)                      # TODO: check the permutations, not sure if right, maybe in test_pipeline
-        x = rearrange(x, "b d n -> b n d")
+        x = self.conv1d_1(x)                     
+        x = jax.nn.mish(x)
+        x = self.conv1d_2(x)
+        x = jax.nn.mish(x)
+        x = rearrange(x, "b d n -> b n d") 
 
         if exists(mask):
-            out = jnp.where(mask , x, fill_value = 0.0)      # TODO: here also check the dimensions
+            out = jnp.where(mask , x, fill_value = 0.0)      
             
         return out 
     
     
 class TimestepEmbedding(nnx.Module):
     
-    def __init__(self, dim, freq_ebmed_dim=256):
-        self.time_embed = SinusPositonalEmbedding(freq_ebmed_dim)
-        self.time_mlp = nnx.Sequential(nnx.Linear(freq_ebmed_dim, dim), nnx.silu(), nnx.Linear(dim, dim))
+    def __init__(self, dim, freq_ebmed_dim=256, rngs:nnx.Rngs = None):
         
+        self.time_embed = SinusPositonalEmbedding(freq_ebmed_dim)
+        self.time_mlp_1 = nnx.Linear(freq_ebmed_dim, dim, rngs = rngs)
+        self.time_mlp_2 = nnx.Linear(dim, dim, rngs = rngs)
+
     def __call__(self, timestep:Float[Array, "b"]): 
         time_hidden = self.time_embed(timestep)
         time_hidden = time_hidden.to(timestep.dtype)
-        time = self.time_mlp(time_hidden)
+        time = self.time_mlp_1(time_hidden)
+        time = nnx.silu(time)
+        time = self.time_mlp_2(time)
         return time
     
 # feed forward class 
 
 class FeedForward(nnx.Module):
     
-    def __init__(self, dim, dim_out = None, mult = 4, dropout = 0.0, approximate:str = "none"):
+    def __init__(self, dim, dim_out = None, mult = 4, dropout = 0.0, approximate:str = "none", rngs:nnx.Rngs = None):
         inner_dim = int(dim * mult)
-        if not dim_out:
-            pass
-        else:
-            dim_out = dim
+        dim_out = dim_out if dim_out is not None else dim
         
-        activation = nnx.gelu(approximate=approximate)
-        project_fn = nnx.Sequential(nnx.Linear(dim, inner_dim), activation)
-        self.ff = nnx.Sequential(project_fn, nnx.Dropout(dropout), nnx.Linear(inner_dim, dim_out))
+        self.approximate = approximate
+        self.linear_1 = nnx.Linear(dim, inner_dim, rngs = rngs)
+        self.droput = nnx.Dropout(dropout, rngs = rngs)
+        self.linear_2 =  nnx.Linear(inner_dim, dim_out, rngs = rngs)
 
-    def forward(self,x):
-        return self.ff(x)    
+    def _call__(self,x):
+        x = nnx.gelu(self.aproximate)
+        x = self.linear_1(x)
+        x = self.droput(x)
+        x = self.linear_2(x)
+        return x
     
 # attention
 
 class Attention(nnx.Module):
     
-    def __init__(self, dim:int, heads:int = 8, dim_head:int = 64, dropout:float = 0.0):
+    def __init__(self, dim:int, heads:int = 8, dim_head:int = 64, dropout:float = 0.0, rngs:nnx.Rngs = None):
         """Standard attention Block for our 
 
         Args:
@@ -346,11 +360,11 @@ class Attention(nnx.Module):
         self.inner_dim = dim_head * heads
         self.droput = dropout
         
-        self.to_q = nnx.Linear(dim, self.inner_dim)
-        self.to_k = nnx.Linear(dim, self.inner_dim)
-        self.to_v = nnx.Linear(dim, self.inner_dim)
+        self.to_q = nnx.Linear(dim, self.inner_dim, rngs = rngs)
+        self.to_k = nnx.Linear(dim, self.inner_dim, rngs = rngs)
+        self.to_v = nnx.Linear(dim, self.inner_dim, rngs = rngs)
         
-        self.to_out = nnx.Sequential(nnx.Linear(self.inner_dim, dim, bias = False), nnx.Dropout(dropout))
+        self.to_out = nnx.Sequential(nnx.Linear(self.inner_dim, dim, use_bias = False, rngs = rngs), nnx.Dropout(dropout, rngs = rngs))
     
     
     def __call__(self, 
@@ -364,16 +378,13 @@ class Attention(nnx.Module):
         key = self.to_k(x)
         values = self.to_v(x)
         
-        if rope is not None:        # TODO: change this code block since it is wrong and only coppied from the original.
-            # freqs, xpos_scale = rope         
-            # q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+        if rope is not None:        
+            freqs, xpos_scale = rope         
+            q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if exists(xpos_scale) else (1.0, 1.0)
 
-            # query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
-            # key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
-            query = None
-            key = None
-
-    
+            query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
+            key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
+        
         query = rearrange(query, "b n (h d) -> b h n d", h=self.heads)
         key =   rearrange(key, "b n (h d) -> b n h d", h=self.heads)
         value = rearrange(value, "b n (h d) -> b h n d", h=self.heads)
@@ -438,27 +449,27 @@ def get_pos_embed_indices(start, length, max_pos, scale=1.0):
 class TextEmbedding(nnx.Module):
     
     
-    def __init__(self, text_num_embeds, text_dim, conv_layers = 0, conv_mult = 2):
+    def __init__(self, text_num_embeds, text_dim, conv_layers = 0, conv_mult = 2, rngs:nnx.Rngs = None):
         
-        self.text_embed = jnp.take(text_num_embeds + 1, text_dim) # TODO: check how it differs to torch.nn.Embedding
+        self.text_embed = nnx.Embed(text_num_embeds + 1, text_dim, rngs=rngs) 
         
         if conv_layers > 0:
             self.extra_modelling = False
-            self.precompute_max_pos = 2048      # TODO: check how much it should differ to our, I think, what most audio is not longer than 20 seconds
+            self.precompute_max_pos = 2048      # TODO: hyperparameter to decide how we can generate speech to, else would be chunking
             self.buffer = {
-                "freqs_cis": precompute_freqs_cis(text_dim, self.precompute_max_pos) #precompu     # TODO: create the precompute_freqs_cis function, which precomputes the position encodings for an max size 
+                "freqs_cis": precompute_freqs_cis(text_dim, self.precompute_max_pos) 
             }
     
-            self.text_blocks = nnx.Sequential(*[ConvNeXtV2Block(text_dim, text_dim * conv_mult) for _ in range(conv_layers)])        
+            self.text_blocks = nnx.Sequential(*[ConvNeXtV2Block(text_dim, text_dim * conv_mult, rngs = rngs) for _ in range(conv_layers)])        
         
         else:
             self.extra_modelling = False
         
-        def forward(self, text:int ["b nt"], seq_len, drop_text = False):
+        def __call__(self, text:Int[Array, "b nt"], seq_len, drop_text = False):
             text = text + 1 
             text = text[:, :seq_len]
             batch, text_len = text.shape[0], text.shape[1]
-            text = jnp.pad(text, (0, seq_len - text_len), mode = "constant")  # TODO: check if paddig is alright
+            text = jnp.pad(text, (0, seq_len - text_len), mode = "constant")  # TODO: critical if not working 
 
             if drop_text:
                 text = jnp.zeros_like(text, dtype = np.int64)
@@ -480,10 +491,10 @@ class TextEmbedding(nnx.Module):
 # noised Inputaudio and context mising embedding
 
 class InputEmbedding(nnx.Module):
-    def __init__(self, mel_dim, text_dim, out_dim):
+    def __init__(self, mel_dim, text_dim, out_dim, rngs:nnx.Rngs = None):
         
-        self.proj = nnx.Linear(mel_dim * 2 + text_dim, out_dim)
-        self.conv_pos_embed = ConvPositionalEmbedding(dim = out_dim)
+        self.proj = nnx.Linear(mel_dim * 2 + text_dim, out_dim, rngs= rngs)
+        self.conv_pos_embed = ConvPositionalEmbedding(dim = out_dim, rngs = rngs)
 
     def __call__(self, 
                  x: Float[Array,"b n d"],
@@ -503,12 +514,12 @@ class InputEmbedding(nnx.Module):
 
 class AdaLayernNormZero(nnx.Module):
     
-    def __init__(self, dim:int, dim_condition:int):
+    def __init__(self, dim:int, rngs: nnx.Rngs = None):
      
       
-        self.linear = nnx.Linear(dim, dim * 2)
+        self.linear = nnx.Linear(dim, dim * 2 , rngs = rngs)
         
-        self.norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False,  epsilon = 1e-6)
+        self.norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False,  epsilon = 1e-6, rngs = rngs)
         
     def __call__(self, x, emb):
         
@@ -527,12 +538,12 @@ class AdaLayernNormZero(nnx.Module):
 
 
 class DiTBlock(nnx.Module):
-    def __init__ (self, dim, heads, dim_head, ff_mult = 4, dropout = 0.1):
-        self.attn_norm = AdaLayernNormZero(dim)
-        self.attn = Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = dropout)
+    def __init__ (self, dim, heads, dim_head, ff_mult = 4, dropout = 0.1, rngs:nnx.Rngs = None):
+        self.attn_norm = AdaLayernNormZero(dim, rngs)
+        self.attn = Attention(dim = dim, heads = heads, dim_head = dim_head, dropout = dropout, rngs = rngs)
         
-        self.ff_norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False, epsilon = 1e-6)
-        self.ff = FeedForward(dim = dim, mult = ff_mult, dropout = dropout, approxiamte = "tanh")
+        self.ff_norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False, epsilon = 1e-6, rngs = rngs)
+        self.ff = FeedForward(dim = dim, mult = ff_mult, dropout = dropout, approximate = "tanh", rngs = rngs)
     
     def __call__ (self, x, t, mask = None, rope = None):
         norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb = t)
@@ -545,40 +556,41 @@ class DiTBlock(nnx.Module):
         return x
 
 class DiT(nnx.Module):
-    def __init__ (self, *, dim, depth = 8, heads = 8,dim_head = 64, dropout = 0.1, ff_mult = 4, mel_dim = 100, text_num_embeds = 256, text_dim = None, conv_layers = 0):
+    def __init__ (self, *, dim, depth = 8, heads = 8,dim_head = 64, dropout = 0.1, ff_mult = 4, mel_dim = 100, text_num_embeds = 256, text_dim = None, conv_layers = 0, rngs:nnx.Rngs):
+
         
+
         if text_dim is None:
             text_dim = mel_dim
             
-        self.time_embed = TimestepEmbedding(dim)
-        self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers)
-        self.input_embed = InputEmbedding(mel_dim, text_dim, dim)
+        self.time_embed = TimestepEmbedding(dim, rngs = rngs)
+        self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers, rngs = rngs)
+        self.input_embed = InputEmbedding(mel_dim, text_dim, dim, rngs)
         self.rotary_embed = RotaryEmbedding(dim_head)
         
         self.dim = dim 
         self.depth = depth
         
-        self.transformers_blocks = [DiTBlock(dim=dim, heads=heads,dim_head=dim_head, ff_mult=ff_mult, dropout=dropout) for _ in range(depth)]
+        self.transformers_blocks = [DiTBlock(dim=dim, heads=heads,dim_head=dim_head, ff_mult=ff_mult, dropout=dropout, rngs = rngs) for _ in range(depth)]
         
-        self.norm_out = AdaLayernNormZero(dim)
-        self.proj_out = nnx.Linear(dim, mel_dim, use_bias=False,kernel_init = nnx.initializers.lecun_normal())
+        self.norm_out = AdaLayernNormZero(dim, rngs = rngs)
+        self.proj_out = nnx.Linear(dim, mel_dim, use_bias=False,kernel_init = nnx.initializers.lecun_normal(), rngs = rngs)
         
     def __call__ (self, x:Float[Array,"b n d"], cond:Float[Array,"b n d"], text:Int[Array, "b nt"], time:Float[Array,"b"], drop_audio_cond, drop_text, mask:Bool[Array,"b n"] | None = None):
         
         batch, seq_len = x.shape[0], x.shape[1]
         
-        #if time.ndim  == 0 :                       # TODO: rewrite this condition to jax
-        # time = repeat(time, " -> b", b=batch)  
+        if time.ndim  == 0 :                       
+            time = repeat(time, " -> b", b=batch)  
         
         t = self.time_embed(time)
         text_embed = self.text_embed(text, seq_len, drop_text = drop_text)
         x = self.input_embed(x, cond, text_embed, drop_audio_cond=drop_audio_cond)
 
-        #rope = self.rotary_embed.forward_from_seq_len(seq_len)  # TODO: not implemented yet
+        rope = self.rotary_embed.forward_from_seq_len(seq_len) 
 
         for block in self.transformers_blocks:
-            x = block(x, t, mask=mask, rope=None) # TODO here should be also rope parsed as argument
-            
+            x = block(x, t, mask=mask, rope=rope) 
         x = self.norm_out(x,t)
         output = self.proj_out(x)
         
@@ -598,11 +610,11 @@ def maybe_masked_mean(t: Float[Array, "b n d"], mask: Bool[Array,"b n"] = None) 
     num = reduce(t, "b n d -> b d", "sum")
     den = reduce(mask.astype(jnp.float32), "b n -> b", "sum")
     
-    return einx.divide("b d, b -> b d", num, jnp.clip(den, min = 1.0))  # TODO: check the if (clip funciton) == torch.clamp()
+    return einx.divide("b d, b -> b d", num, jnp.clip(den, min = 1.0))  # TODO: check the if (clip funciton) == torch.clamp() ( shoudld be alright )
     
     
 
-class Rearrange(nnx.Module):                        # TODO: eher unötig oder nicht ?
+class Rearrange(nnx.Module):                     
     def __init__(self, pattern:str):
         self.pattern = pattern
     def __call__(self, x: jnp.array) -> jnp.array:
@@ -610,9 +622,9 @@ class Rearrange(nnx.Module):                        # TODO: eher unötig oder ni
     
 
 class DurationInputEmbedding(nnx.Module):
-    def __init__ (self, mel_dim, text_dim, out_dim):
-        self.proj = nnx.Linear(mel_dim + text_dim, out_dim)
-        self.conv_pos_embed = ConvPositionalEmbedding(dim=out_dim)
+    def __init__ (self, mel_dim, text_dim, out_dim, rngs:nnx.Rngs = None):
+        self.proj = nnx.Linear(mel_dim + text_dim, out_dim, rngs = rngs)
+        self.conv_pos_embed = ConvPositionalEmbedding(dim=out_dim, rngs = rngs)
     
     def __call__ (self, x:Float[Array, "b n d"], text_embed: Float[Array,"b nd "]):
         x = self.proj(jnp.concat((x, text_embed), dim = -1))
@@ -621,16 +633,17 @@ class DurationInputEmbedding(nnx.Module):
         
         
 class DurationBlock(nnx.Module):
-    def __init__ (self, dim, heads, dim_head, ff_mult = 4, dropout = 0.1):
-        self.attn_normal = nnx.LayerNorm(dim, use_bias= False, use_scale = False, epsilon = 1e-6)
+    def __init__ (self, dim, heads, dim_head, ff_mult = 4, dropout = 0.1, rngs:nnx.Rngs = None):
+        self.attn_normal = nnx.LayerNorm(dim, use_bias= False, use_scale = False, epsilon = 1e-6, rngs = rngs)
         self.attn = Attention(
             dim = dim,
             heads = heads,
             dim_head = dim_head,
-            dropout = dropout,   
+            dropout = dropout,
+            rngs = rngs  
         )
-        self.ff_norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False, eps = 1e-6)
-        self.ff =FeedForward(dim = dim, mult = ff_mult, dropout=dropout, approximate = "tanh")
+        self.ff_norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False, eps = 1e-6, rngs = rngs)
+        self.ff = FeedForward(dim = dim, mult = ff_mult, dropout=dropout, approximate = "tanh", rngs = rngs)
         
     def __call__(self, x, mask = None, rope = None):
         norm = self.attn_norm(x)
@@ -645,13 +658,13 @@ class DurationTransformer(nnx.Module):
     def __init__(self, * , dim:int, depth:int = 8,
                  heads:int = 8, dim_head:int = 64, droput:float = 0.1,
                  ff_mult:int = 4, mel_dim:int = 100, text_num_embeds:int = 256,
-                 text_dim = None, conv_layers = 0,
+                 text_dim = None, conv_layers = 0, rngs:nnx.Rngs = None
                  ):
         if text_dim is None:
             text_dim = mel_dim
             
-        self.text_embed = TextEmbedding(text_num_embeds = text_num_embeds, text_dim = text_dim, conv_layers = conv_layers)
-        self.input_embed = DurationInputEmbedding(mel_dim, text_dim, dim)
+        self.text_embed = TextEmbedding(text_num_embeds = text_num_embeds, text_dim = text_dim, conv_layers = conv_layers, rngs = rngs) # TODO:here rngs pass
+        self.input_embed = DurationInputEmbedding(mel_dim, text_dim, dim, rngs)
         self.rotary_embed = RotaryEmbedding(dim_head)
         
         self.dim = dim
@@ -663,10 +676,11 @@ class DurationTransformer(nnx.Module):
             dim_head = dim_head, 
             ff_mult = ff_mult, 
             dropout = droput,
+            rngs = rngs
         ) for _ in range(depth)
                                    ]    
     
-        self.norm_out = nnx.RMSNorm(dim)
+        self.norm_out = nnx.RMSNorm(dim, rngs = rngs)
     
     def __call__ (self, x:Float [Array, "b n d"], text:Int [Array,"b nt"], mask:Bool[Array,"b n"] | None = None):
         seq_len = x.shape[1]
@@ -689,23 +703,22 @@ def l1_loss(pred, target, reduction = None):
     return jnp.abs(pred, target)    
 
 class DurationPredictor(nnx.Module):
-    def __init__ (self, transformer:nnx.Module, mel_spec_kwargs: dict = dict(), tokenizer: einx.Callable[[str], list[str]] | None = None,):
-        if not exists(mel_spec_kwargs):
-            self.mel_spec = MelSpec(**mel_spec_kwargs)
+    def __init__ (self, transformer:nnx.Module, tokenizer: einx.Callable[[str], list[str]] | None = None, rngs:nnx.Rngs = None):
+        
             
-        self.num_channels = self.mel_spec.n_mel_channels
+        self.num_channels = 100 # TODO: hardcoding is not nice
         self.transformer = transformer
         self.tokenizer = tokenizer
-        self.to_pred = nnx.Sequential(nnx.Linear(transformer.dim, 1, use_bias= False), nnx.softplus(), Rearrange("... 1 -> ..."))
+        self.rearrange = Rearrange("... 1 -> ...")
+        self.to_pred = nnx.Linear(transformer.dim, 1, use_bias= False, rngs = rngs), nnx.softplus(), Rearrange("... 1 -> ...")
     
     
     
     def __call__ (self, inp: Float[Array, "b n d"] | Float[Array, "b nw"], text: Int[Array,"b nt"] | list[str], *, lens:Int[Array,"b"] | None = None, return_loss = False, key:int = 42):
         
-        # check if inp is not mel-spectogram (maybe because of an bug)
+        # TODO:check if inp is not mel-spectogram (maybe because of an bug), than just throw the the sample away
         
-        if inp.ndim == 2:           # TODO: pretty sure to cast the data from torch to flax if it was not preprocessed
-            
+        if inp.ndim == 2:           # TODO: 
             inp = self.mel_spec(inp)
             inp = rearrange(inp, "b d n -> b n d")
             assert inp.shape[-1] == self.num_channels
@@ -743,7 +756,9 @@ class DurationPredictor(nnx.Module):
         
         x = maybe_masked_mean(x, mask)
         
-        pred = self.to_pred(x)
+        x = self.to_pred(x)
+        x = nnx.softplus(x)
+        pred = Rearrange(x)
         
         if not return_loss:
             return pred
@@ -850,12 +865,14 @@ class GermanTTS(nnx.Module):
         duration_predictor: nnx.Module | None = None,
         tokenizer: Callable[[str], list[str]] | None = None,
         vocoder: Callable[[],Float[Array, "b d n"]] | None = None,  # noqa: F722
-        seed:int = 42,
+        rngs:nnx.Rngs = None,
     ):
             self.frac_lengths_mask = frac_lengths_mask
+
             
-            self.mel_spec = MelSpec(**mel_spec_kwargs)
-            self.num_channels = self.mel_spec.n_mel_channels
+            
+            #self.mel_spec = MelSpec(**mel_spec_kwargs)
+            #self.num_channels = self.mel_spec.n_mel_channels
             
             self.audio_drop_prob = audio_drop_prob
             self.audio_cond_prob = cond_drop_prob
@@ -869,10 +886,7 @@ class GermanTTS(nnx.Module):
             self.vocoder = vocoder 
             
             self._duration_predictor = duration_predictor
-            
-            self.rng_key = jax.random.key(seed)
-            
-            self.EMA_model = optax.ema()
+          
             
         def device(self):
             return next((self.parameters())).device
@@ -1009,7 +1023,7 @@ class GermanTTS(nnx.Module):
             for dur in duration:
                 if exists(self.rng_key):
                     y0.append(jax.random.normal(self.rng_key, (dur, self.num_channels), dtype = step_cond.dtype))
-            #y0 = pad_seq  #TODO: look for better option to do this
+            #y0 = pad_se  #TODO: not urgent but needs to be done 
             
             t = jnp.linspace(0, 1, dtype = step_cond.dtype)
             if exists(sway_sampling_coef):
