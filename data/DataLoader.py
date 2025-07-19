@@ -53,7 +53,7 @@ class Huggingface_Datasetloader:
     
     def __init__(
         self,
-        name_of_dataset:str,
+        name_of_dataset:str = None,
         if_stream: bool = False,
         language:str = "",
         split:str = "",

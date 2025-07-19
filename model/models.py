@@ -94,14 +94,13 @@ def list_str_to_vocab_tensor(
     return jnp.array(padded)
 
 # tensor helpers
-@jax.jit
-def lens_to_mask(lengths, max_len=None):
-    if max_len is None:
-        max_len = jnp.amax(lengths)
-    seq = jnp.arange(max_len)
-    return seq[None, :] < lengths[:, None]
 
-@jax.jit
+def lens_to_mask(lengths, max_len:int):
+    seq_indices = jnp.arange(max_len)
+    mask = seq_indices[None, :] < lengths[:, None]
+    return mask
+
+
 def mask_from_start_end_indicies(start: int,  # noqa: F722 F821
     end: int,  # noqa: F722 F821
     max_seq_len: int,
@@ -111,13 +110,15 @@ def mask_from_start_end_indicies(start: int,  # noqa: F722 F821
     end_mask = seq[None, :] < end[:, None]
     return start_mask & end_mask
 
-@jax.jit
-def mask_from_frac_lengths(seq_len: int, frac_lengths:float, max_seq_len:int, seed = key):
-    lengths = jnp.int64(frac_lengths * seq_len)
-    max_start = seq_len - lengths
+
+def mask_from_frac_lengths(seq_len: int, frac_lengths:float, max_seq_len:int, rngs:nnx.Rngs = None):
     
-    key = jax.random.key(seed)
-    rand = jax.random.uniform(key, shape = (len(frac_lengths), ))
+    lengths = jnp.int64(frac_lengths * seq_len)
+    
+    max_start = seq_len - lengths
+
+    rngs_rand = rngs.mask()
+    rand = jax.random.uniform(rngs_rand, shape = (len(frac_lengths), ))
     
     start = jnp.clip(jnp.int64(max_start * rand), min = 0)
     
@@ -153,33 +154,34 @@ class RotaryEmbedding(nnx.Module):
             return
         
         scale = (jnp.arange(0, dim, 2 + 0.4 * dim) / (1.4 * dim))
-        
+        logger.info(f"scale value: {scale}")
         self.scale_base = scale_base
         self.buffer_scale = Buffer(scale)
         
     
     def forward_from_seq_len(self, seq_len):
-        
         t = jnp.arange(seq_len)
-        return t
+        freqs, scale = self(t)
+        return freqs, scale
     
     def __call__ (self, t:jnp.ndarray):
         max_pos = t.max() + 1
-        
-        if t.ndim == 3:
+
+        if t.ndim == 1:
             t = rearrange(t, "n -> 1 n")
-            
-        freqs = jnp.einsum("bi,j->bij", t.astype(jnp.float32), self.buffer_inv_freq) / self.interpolation_factor
+
+        freqs = jnp.einsum("b i , j -> b i j", t.astype(jnp.float32), self.buffer_inv_freq) / self.interpolation_factor
         freqs = jnp.stack((freqs, freqs), axis = -1)
         freqs = rearrange(freqs, "... d r -> ... (d r)")
         
         if not exists(self.buffer_scale):
             return freqs, 1.0
-        
-        power = (t - (max_pos // 2)) / self.buffer_scale
-        scale = self.buffer_scale ** rearrange(power, "n -> n 1")
+ 
+        power = (t - (max_pos // 2)) / self.scale_base
+       
+        scale = self.buffer_scale ** rearrange(power, "1 n -> n 1")
         scale = jnp.stack((scale, scale), axis = -1)  
-        scale = rearrange(scale, "... d r -> (d r)")
+        scale = rearrange(scale, "... d r -> ... (d r)")
         
         return freqs, scale
 
@@ -200,7 +202,7 @@ def apply_rotary_pos_emb(t, freqs, scale=1):
     scale = scale[:, -seq_len:, :] if isinstance(scale, jnp.ndarray) else scale
     
     if t.ndim == 4 and freqs.dim == 3:
-        freqs = rearrange(freqs, "b n d -> b 1 n d")
+        freqs = rearrange(freqs, "b n d len(valid_clients)-> b 1 n d")
     
     t, t_unrotated = t[..., :rot_dim,], t[..., rot_dim:]
     t = (t * jnp.cos(freqs) * scale) + (rotate_half(t) * jnp.sin(freqs) * scale)
@@ -260,18 +262,23 @@ class ConvNeXtV2Block(nnx.Module):
 # sinusoidal position embedding
 
 class SinusPositonalEmbedding(nnx.Module):
-    def __init__(self, dim:int):
+    def __init__(self, dim: int):
         self.dim = dim
-        
-    def __call__(self, x:jnp.ndarray, scale = 1000):
-        device = x.device
-        half_dim = self.dim // 2
-        emb = jnp.log(10_000) / half_dim - 1                               
 
-        emb = jnp.exp(jnp.arange(half_dim, device = device).float() * -emb)
-        emb = scale * jnp.expand_dims(x, 1) * jnp.expand_dims(emb, 0)
-        emb = jnp.concat((jnp.sin(emb),jnp.cos(emb)), axis = 1)
+    def __call__(self, x: jnp.ndarray, scale: float = 1000.0):
+        half_dim = self.dim // 2
+
+        log_base = jnp.log(10000.0) # Ensure it's float, e.g., jnp.log(10000.)
+        
+        exponent = jnp.arange(half_dim, dtype=jnp.float32) / half_dim
+    
+        inv_freq = jnp.exp(exponent * -log_base) # Equivalent to 1 / (10000 ** exponent)        
+        scaled_timesteps = scale * jnp.expand_dims(x, 1) * jnp.expand_dims(inv_freq, 0)
+
+        emb = jnp.concat((jnp.sin(scaled_timesteps), jnp.cos(scaled_timesteps)), axis=1)
+        
         return emb
+
 
 # Convolutional postion embedding
 
@@ -302,20 +309,23 @@ class ConvPositionalEmbedding(nnx.Module):
         return out 
     
     
-class TimestepEmbedding(nnx.Module):
+class TimestepEmbedding(nnx.Module):         #TODO here is something wrong
     
     def __init__(self, dim, freq_ebmed_dim=256, rngs:nnx.Rngs = None):
         
-        self.time_embed = SinusPositonalEmbedding(freq_ebmed_dim)
+        self.time_embed = SinusPositonalEmbedding(freq_ebmed_dim) 
         self.time_mlp_1 = nnx.Linear(freq_ebmed_dim, dim, rngs = rngs)
         self.time_mlp_2 = nnx.Linear(dim, dim, rngs = rngs)
 
-    def __call__(self, timestep:Float[Array, "b"]): 
+    def __call__(self, timestep:Float[Array, "b"]):
+
         time_hidden = self.time_embed(timestep)
-        time_hidden = time_hidden.to(timestep.dtype)
+
+        time_hidden = time_hidden.astype(timestep.dtype)
         time = self.time_mlp_1(time_hidden)
         time = nnx.silu(time)
         time = self.time_mlp_2(time)
+
         return time
     
 # feed forward class 
@@ -374,6 +384,7 @@ class Attention(nnx.Module):
                 ) -> jnp.array:
         batch_size = x.shape[0]
 
+        breakpoint()
         query = self.to_q(x)
         key = self.to_k(x)
         values = self.to_v(x)
@@ -381,6 +392,8 @@ class Attention(nnx.Module):
         if rope is not None:        
             freqs, xpos_scale = rope         
             q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if exists(xpos_scale) else (1.0, 1.0)
+
+            breakpoint()
 
             query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
             key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
@@ -454,7 +467,7 @@ class TextEmbedding(nnx.Module):
         self.text_embed = nnx.Embed(text_num_embeds + 1, text_dim, rngs=rngs) 
         
         if conv_layers > 0:
-            self.extra_modelling = False
+            self.extra_modelling = True
             self.precompute_max_pos = 2048      # TODO: hyperparameter to decide how we can generate speech to, else would be chunking
             self.buffer = {
                 "freqs_cis": precompute_freqs_cis(text_dim, self.precompute_max_pos) 
@@ -465,27 +478,28 @@ class TextEmbedding(nnx.Module):
         else:
             self.extra_modelling = False
         
-        def __call__(self, text:Int[Array, "b nt"], seq_len, drop_text = False):
-            text = text + 1 
-            text = text[:, :seq_len]
-            batch, text_len = text.shape[0], text.shape[1]
-            text = jnp.pad(text, (0, seq_len - text_len), mode = "constant")  # TODO: critical if not working 
-
-            if drop_text:
-                text = jnp.zeros_like(text, dtype = np.int64)
+    def __call__(self, text:Int[Array, "b nt"], seq_len, drop_text = False):
+        text = text + 1 
+        text = text[:, :seq_len]
+        batch, text_len = text.shape[0], text.shape[1]
+        breakpoint()
+        text = jnp.pad(text, ((0,0),(0, seq_len - text_len)), mode = "constant")  # TODO: critical if not working 
+        breakpoint()
+        if drop_text:
+            text = jnp.zeros_like(text, dtype = np.int64)
                 
-            text = self.text_embed(text)
+        text = self.text_embed(text)
             
-            if self.extra_modelling:
+        if self.extra_modelling:
                 
-                batch_start = jnp.zeros((batch,), dtype = np.int64)
-                pox_idx = get_pos_embed_indices(batch_start, seq_len, max_pos = self.precompute_max_pos)
-                text_pos_embed = self.buffer["freq_cis"][pox_idx]
-                text = text + text_pos_embed
+            batch_start = jnp.zeros((batch,), dtype = np.int64)
+            pox_idx = get_pos_embed_indices(batch_start, seq_len, max_pos = self.precompute_max_pos)
+            text_pos_embed = self.buffer["freq_cis"][pox_idx]
+            text = text + text_pos_embed
                 
-                text = self.text_blocks(text)
+            text = self.text_blocks(text)
                 
-            return text
+        return text
             
         
 # noised Inputaudio and context mising embedding
@@ -502,38 +516,37 @@ class InputEmbedding(nnx.Module):
                  text_embed:Float[Array,"b n d"],
                  drop_audio_cond = False,
                  ):
+        
         if drop_audio_cond:
             cond = jnp.zeros_like(cond)
             
             x = self.proj(jnp.concatenate((x, cond, text_embed), axis = -1))
             x = self.conv_pos_embed(x) + x
             
-            return x
+        
+        return x
         
 
 
 class AdaLayernNormZero(nnx.Module):
-    
-    def __init__(self, dim:int, rngs: nnx.Rngs = None):
-     
-      
-        self.linear = nnx.Linear(dim, dim * 2 , rngs = rngs)
+    def __init__(self, dim: int, rngs: nnx.Rngs = None):
+        self.linear = nnx.Linear(dim, dim * 6, rngs=rngs)
+        self.norm = nnx.LayerNorm(dim, use_bias=False, use_scale=False, epsilon=1e-6, rngs=rngs)
         
-        self.norm = nnx.LayerNorm(dim, use_bias = False, use_scale = False,  epsilon = 1e-6, rngs = rngs)
+    def __call__(self, x: jax.Array, emb: jax.Array):
+        emb_activated = nnx.silu(emb)
+        emb_projected = self.linear(emb_activated)
         
-    def __call__(self, x, emb):
-        
-        emb = self.linear(nnx.silu(emb))
-        
-        scale, shift = jnp.split(emb, 2, axis=-1)
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = jnp.split(emb_projected, 6, axis=-1)
         
         normed_x = self.norm(x)
         
-        scale_expanded = jnp.expand_dims(scale, axis = 1)
-        shift_expanded = jnp.expand_dims(shift, axis = 1)
-        
-        output = normed_x * (1 + scale_expanded) + shift_expanded 
-        return output
+        scale_msa_expanded = jnp.expand_dims(scale_msa, axis=1)
+        shift_msa_expanded = jnp.expand_dims(shift_msa, axis=1)
+        breakpoint()
+        x_output = normed_x * (1 + scale_msa_expanded) + shift_msa_expanded 
+
+        return x_output, gate_msa, shift_mlp, scale_mlp, gate_mlp
         
 
 
@@ -546,6 +559,7 @@ class DiTBlock(nnx.Module):
         self.ff = FeedForward(dim = dim, mult = ff_mult, dropout = dropout, approximate = "tanh", rngs = rngs)
     
     def __call__ (self, x, t, mask = None, rope = None):
+   
         norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb = t)
         attn_output = self.attn(x=norm, mask = mask, rope = rope)
         x = x + jnp.expand_dims(gate_msa, axis = -1)  * attn_output
@@ -566,7 +580,7 @@ class DiT(nnx.Module):
         self.time_embed = TimestepEmbedding(dim, rngs = rngs)
         self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers, rngs = rngs)
         self.input_embed = InputEmbedding(mel_dim, text_dim, dim, rngs)
-        self.rotary_embed = RotaryEmbedding(dim_head)
+        self.rotary_embed = RotaryEmbedding(dim_head, use_xpos = True)
         
         self.dim = dim 
         self.depth = depth
@@ -578,7 +592,7 @@ class DiT(nnx.Module):
         
     def __call__ (self, x:Float[Array,"b n d"], cond:Float[Array,"b n d"], text:Int[Array, "b nt"], time:Float[Array,"b"], drop_audio_cond, drop_text, mask:Bool[Array,"b n"] | None = None):
         
-        batch, seq_len = x.shape[0], x.shape[1]
+        batch, seq_len = x.shape[0], x.shape[2]
         
         if time.ndim  == 0 :                       
             time = repeat(time, " -> b", b=batch)  
@@ -587,8 +601,12 @@ class DiT(nnx.Module):
         text_embed = self.text_embed(text, seq_len, drop_text = drop_text)
         x = self.input_embed(x, cond, text_embed, drop_audio_cond=drop_audio_cond)
 
+        breakpoint()
+
         rope = self.rotary_embed.forward_from_seq_len(seq_len) 
 
+        breakpoint()
+        
         for block in self.transformers_blocks:
             x = block(x, t, mask=mask, rope=rope) 
         x = self.norm_out(x,t)
@@ -875,7 +893,7 @@ class GermanTTS(nnx.Module):
             #self.num_channels = self.mel_spec.n_mel_channels
             
             self.audio_drop_prob = audio_drop_prob
-            self.audio_cond_prob = cond_drop_prob
+            self.cond_drop_prob = cond_drop_prob
             
             self.transformers = transformer
             dim = transformer.dim
@@ -893,16 +911,15 @@ class GermanTTS(nnx.Module):
         
         def __call__(self,
                      inp:Float[Array,"b n d"] | Float[Array,"b nw"],
-                     text:Int[Array,"b nt"] | list[str],
-                     *,
-                     time: jnp.ndarray, # (b,) timestep
                      cond: jnp.ndarray, # (b, n, d) or (b, n) conditional input
-                     mask: jnp.ndarray, # (b, n) mask for transformer attention
+                     text:Int[Array,"b nt"] | list[str],
+                     time: jnp.ndarray, # (b,) timestep
                      drop_audio_cond: bool = False,
                      drop_text: bool = False,
+                     mask: jnp.ndarray = None, # (b, n) mask for transformer attention
                     ):
            
-            
+         
             pred = self.transformers(x = inp,
                                      cond = cond, 
                                      text = text, 
