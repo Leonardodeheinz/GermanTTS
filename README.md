@@ -4,8 +4,8 @@
 
 ## Some ToDos open in code
 
-    - ToDo write an small dataloader class where I can convert the data also 
-    - write an environment.yml 
+    - ToDo write an small dataloader class where I can convert the data also
+    - write an environment.yml
         - current packages for env:
             - jax
             - flax
@@ -17,10 +17,10 @@
 
 ## 📖 Thesis Title: *Your Thesis Title Here*
 
-**Author:** Your Name  
-**Supervisor:** Supervisor's Name  
-**Institution:** Your University  
-**Date:** Month, Year  
+**Author:** Your Name
+**Supervisor:** Supervisor's Name
+**Institution:** Your University
+**Date:** Month, Year
 
 ---
 
@@ -81,6 +81,5 @@ While this is a personal academic project, contributions are welcome for improvi
 ---
 
 ## 📬 Contact
-For questions or discussions, contact me at:  
-📧 **Email:** your.email@example.com  
-🔗 **LinkedIn:** [your-linkedin](https://linkedin.com/in/yourprofile)  
+For questions or discussions, contact me at:
+📧 **Email:** heinzd.45@gmail.com
